@@ -1,3 +1,7 @@
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+# Original local YOLO ONNX inference script (see app/ for the FastAPI version).
+
 import os
 import shutil
 import tempfile

@@ -1,3 +1,6 @@
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles

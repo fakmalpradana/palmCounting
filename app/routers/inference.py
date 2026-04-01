@@ -1,3 +1,5 @@
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
 """
 /api/inference          — upload GeoTIFF → GeoJSON detections (+ timing).
 /api/preview/<id>       — stretched-RGB PNG for the map overlay.
