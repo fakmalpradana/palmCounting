@@ -315,6 +315,20 @@
 
     #map { flex: 1; width: 100%; background: var(--bg-surface); }
 
+    /*
+     * Step 6 — Z-Index Fix
+     * Leaflet default: both ImageOverlay and GeoJSON share "overlayPane" (z:400).
+     * DOM insertion order then controls which renders on top — causing the bug
+     * where toggling layers off/on puts the raster above the vectors.
+     *
+     * Fix: two named panes with explicit, locked z-index values:
+     *   rasterPane  z:300  — always below
+     *   vectorPane  z:400  — always above
+     * Each layer is bound to its pane at creation AND on every re-add (toggle).
+     */
+    .leaflet-pane.rasterPane { z-index: 300 !important; }
+    .leaflet-pane.vectorPane { z-index: 400 !important; pointer-events: none; }
+
     /* Leaflet overrides */
     .leaflet-container { background: var(--bg-surface); }
     .leaflet-control-zoom a { background: var(--bg-overlay) !important; border-color: var(--border) !important; color: var(--text) !important; backdrop-filter: blur(4px); }
