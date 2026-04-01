@@ -1,0 +1,31 @@
+# Palm Counter — CUDA requirements (Windows / Linux with NVIDIA GPU)
+# Requires: CUDA Toolkit 11.8 or 12.x  +  cuDNN installed
+# Install:  pip install -r requirements-cuda.txt
+
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
+# Image & raster
+Pillow>=10.0.0
+tifffile>=2024.1.1
+rasterio>=1.3.0
+numpy>=1.26.0
+
+# YOLO / ONNX inference  (CUDA)
+# Use opencv-python (not headless) so DNN CUDA backend is available
+opencv-python>=4.9.0
+# GPU-accelerated ONNX Runtime — choose the wheel matching your CUDA version:
+#   CUDA 11.8 → onnxruntime-gpu==1.18.0
+#   CUDA 12.x → onnxruntime-gpu>=1.18.0
+onnxruntime-gpu>=1.18.0
+
+# Geo
+geopandas>=0.14.0
+shapely>=2.0.0
+rtree>=1.0.0
+pyproj>=3.6.0
+
+# Utilities
+pyyaml>=6.0
+tqdm>=4.66.0

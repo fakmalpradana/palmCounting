@@ -1,8 +1,16 @@
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
 """
 Core YOLO ONNX inference logic — extracted from main.py.
 All geo-coordinate math and overlap filtering lives here.
+
+Backend selection (automatic, in priority order):
+  1. onnxruntime-gpu  — if installed and a CUDA device is available
+  2. onnxruntime      — CPU, cross-platform (macOS / Windows / Linux)
+  3. cv2.dnn          — OpenCV fallback
 """
 
+import logging
 import math
 import os
 import shutil
@@ -20,6 +28,29 @@ from shapely.geometry import Point
 from shapely.ops import unary_union
 from tqdm import tqdm
 
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Backend detection
+# ---------------------------------------------------------------------------
+
+_ORT_SESSION_CLASS = None   # onnxruntime.InferenceSession if available
+_ORT_PROVIDERS: list[str] = []
+
+try:
+    import onnxruntime as ort
+
+    available = ort.get_available_providers()
+    if "CUDAExecutionProvider" in available:
+        _ORT_PROVIDERS = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+        log.info("ONNX Runtime backend: CUDA")
+    else:
+        _ORT_PROVIDERS = ["CPUExecutionProvider"]
+        log.info("ONNX Runtime backend: CPU")
+    _ORT_SESSION_CLASS = ort.InferenceSession
+except ImportError:
+    log.info("onnxruntime not found — falling back to cv2.dnn (CPU only)")
+
 
 # ---------------------------------------------------------------------------
 # Model loading
@@ -32,10 +63,20 @@ def load_labels(yaml_path: str) -> list[str]:
 
 
 def load_yolo_model(model_path: str):
+    """
+    Return an inference session object.
+    If onnxruntime is available it returns an ``ort.InferenceSession``;
+    otherwise it returns an ``cv2.dnn.Net``.
+    """
+    if _ORT_SESSION_CLASS is not None:
+        session = _ORT_SESSION_CLASS(model_path, providers=_ORT_PROVIDERS)
+        return ("ort", session)
+
+    # cv2.dnn fallback
     net = cv2.dnn.readNetFromONNX(model_path)
     net.setPreferableBackend(cv2.dnn.DNN_BACKEND_OPENCV)
     net.setPreferableTarget(cv2.dnn.DNN_TARGET_CPU)
-    return net
+    return ("cv2", net)
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +168,33 @@ def _get_gsd(raster_path: str) -> tuple[float, float]:
         return abs(src.transform[0]), abs(src.transform[4])
 
 
+def _run_forward(model_tuple, canvas: np.ndarray, input_size: int) -> np.ndarray:
+    """
+    Run a forward pass through whichever backend is loaded.
+    Returns raw predictions array of shape (N, 5+classes).
+    """
+    backend, model = model_tuple
+
+    if backend == "ort":
+        # ONNX Runtime path (CPU or CUDA)
+        blob = cv2.dnn.blobFromImage(
+            canvas, 1 / 255, (input_size, input_size), swapRB=True, crop=False
+        )
+        input_name = model.get_inputs()[0].name
+        preds = model.run(None, {input_name: blob})[0]
+        return preds[0]   # shape: (N, 5+cls)
+
+    # cv2.dnn fallback
+    blob = cv2.dnn.blobFromImage(
+        canvas, 1 / 255, (input_size, input_size), swapRB=True, crop=False
+    )
+    model.setInput(blob)
+    return model.forward()[0]
+
+
 def _detect_on_tile(
     image: np.ndarray,
-    net,
+    model_tuple,
     labels: list[str],
     input_size: int = 640,
     conf_threshold: float = 0.1,
@@ -140,18 +205,14 @@ def _detect_on_tile(
     canvas = np.zeros((max_rc, max_rc, 3), dtype=np.uint8)
     canvas[0:row, 0:col] = image
 
-    blob = cv2.dnn.blobFromImage(
-        canvas, 1 / 255, (input_size, input_size), swapRB=True, crop=False
-    )
-    net.setInput(blob)
-    preds = net.forward()[0]
+    preds = _run_forward(model_tuple, canvas, input_size)
 
     x_factor = max_rc / input_size
     y_factor = max_rc / input_size
 
     boxes, confidences, classes = [], [], []
     for det in preds:
-        conf = det[4]
+        conf = float(det[4])
         if conf <= conf_threshold:
             continue
         class_score = det[5:].max()
@@ -160,9 +221,9 @@ def _detect_on_tile(
             continue
         cx, cy, w, h = det[0:4]
         left = int((cx - 0.5 * w) * x_factor)
-        top = int((cy - 0.5 * h) * y_factor)
+        top  = int((cy - 0.5 * h) * y_factor)
         boxes.append([left, top, int(w * x_factor), int(h * y_factor)])
-        confidences.append(float(conf))
+        confidences.append(conf)
         classes.append(class_id)
 
     indices = cv2.dnn.NMSBoxes(boxes, confidences, conf_threshold, nms_threshold)
@@ -172,16 +233,11 @@ def _detect_on_tile(
         for i in flat:
             idx = int(i)
             b = boxes[idx]
-            results.append(
-                {
-                    "class_name": labels[classes[idx]],
-                    "confidence": confidences[idx],
-                    "x": b[0],
-                    "y": b[1],
-                    "width": b[2],
-                    "height": b[3],
-                }
-            )
+            results.append({
+                "class_name": labels[classes[idx]],
+                "confidence": confidences[idx],
+                "x": b[0], "y": b[1], "width": b[2], "height": b[3],
+            })
     return results
 
 
@@ -231,7 +287,7 @@ def run_inference(
     and metadata: total count, CRS string, and bounds.
     """
     labels = load_labels(yaml_path)
-    net = load_yolo_model(model_path)
+    net = load_yolo_model(model_path)   # returns ("ort"|"cv2", model)
 
     temp_dir = tempfile.mkdtemp(prefix="palm_tiles_")
     try:
@@ -264,7 +320,7 @@ def run_inference(
             gsd_x = auto_gsd_x
             gsd_y = auto_gsd_y
 
-            dets = _detect_on_tile(img, net, labels, 640, conf_threshold, nms_threshold)
+            dets = _detect_on_tile(img, net, labels, tile_width, conf_threshold, nms_threshold)
             for d in dets:
                 coord_x = (d["x"] + d["width"] / 2) * gsd_x + bounds.left
                 coord_y = bounds.top - (d["y"] + d["height"] / 2) * gsd_y

@@ -1,13 +1,26 @@
+# Palm Counter — CPU requirements (macOS, Windows, Linux)
+# Install: pip install -r requirements.txt
+
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
+
+# Image & raster
 Pillow>=10.0.0
 tifffile>=2024.1.1
-opencv-python-headless>=4.9.0
-pyyaml>=6.0
-numpy>=1.26.0
-geopandas>=0.14.0
 rasterio>=1.3.0
+numpy>=1.26.0
+
+# YOLO / ONNX inference  (CPU)
+opencv-python-headless>=4.9.0   # swap for opencv-python on Windows if GUI needed
+onnxruntime>=1.18.0             # CPU inference via ONNX Runtime
+
+# Geo
+geopandas>=0.14.0
 shapely>=2.0.0
 rtree>=1.0.0
+pyproj>=3.6.0
+
+# Utilities
+pyyaml>=6.0
 tqdm>=4.66.0
