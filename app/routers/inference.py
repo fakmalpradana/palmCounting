@@ -1,15 +1,19 @@
 """
-/api/inference  — upload a GeoTIFF, get back GeoJSON detections.
-/api/raster/<id> — serve the uploaded raster back to the frontend.
+/api/inference      — upload a GeoTIFF, get back GeoJSON detections.
+/api/preview/<id>   — stretched-RGB PNG + WGS84 bounds for the map overlay.
 """
 
-import json
+import io
 import os
 import uuid
 from pathlib import Path
 
+import numpy as np
+import rasterio
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import JSONResponse, Response
+from PIL import Image
+from rasterio.warp import transform_bounds
 
 from app.core.inference import run_inference
 
@@ -62,12 +66,60 @@ async def infer(
     return JSONResponse({"file_id": file_id, "geojson": geojson})
 
 
-@router.get("/raster/{file_id}")
-def get_raster(file_id: str):
-    # Sanitise: only hex + dashes (UUID format)
+@router.get("/preview/{file_id}")
+def get_preview(file_id: str):
+    """Return a web-displayable PNG with raster bounds in the response body."""
     if not all(c in "0123456789abcdef-" for c in file_id):
         raise HTTPException(400, "Invalid file ID.")
     path = UPLOAD_DIR / f"{file_id}.tif"
     if not path.exists():
         raise HTTPException(404, "Raster not found.")
-    return FileResponse(str(path), media_type="image/tiff")
+
+    with rasterio.open(path) as src:
+        bounds_wgs84 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+        n_bands = src.count
+
+        # Pick RGB or grayscale bands
+        if n_bands >= 3:
+            data = src.read([1, 2, 3])
+        else:
+            data = np.stack([src.read(1)] * 3)
+
+        # Percentile stretch per band, handle nodata
+        nodata = src.nodata
+        rgb = np.zeros((data.shape[1], data.shape[2], 3), dtype=np.uint8)
+        for i in range(3):
+            band = data[i].astype(float)
+            mask = (band != nodata) if nodata is not None else np.ones_like(band, dtype=bool)
+            valid = band[mask]
+            if valid.size == 0:
+                valid = band.flatten()
+            p2, p98 = np.percentile(valid, (2, 98))
+            if p98 == p2:
+                p98 = p2 + 1
+            stretched = np.clip((band - p2) / (p98 - p2) * 255, 0, 255).astype(np.uint8)
+            rgb[:, :, i] = stretched
+
+    img = Image.fromarray(rgb)
+    # Downsample large rasters for web delivery
+    max_dim = 2048
+    if max(img.size) > max_dim:
+        ratio = max_dim / max(img.size)
+        img = img.resize((int(img.size[0] * ratio), int(img.size[1] * ratio)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+
+    w, s, e, n = bounds_wgs84
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/png",
+        headers={
+            "X-Raster-West": str(w),
+            "X-Raster-South": str(s),
+            "X-Raster-East": str(e),
+            "X-Raster-North": str(n),
+            "Access-Control-Expose-Headers": "X-Raster-West,X-Raster-South,X-Raster-East,X-Raster-North",
+        },
+    )

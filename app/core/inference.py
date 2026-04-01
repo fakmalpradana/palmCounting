@@ -289,11 +289,17 @@ def run_inference(
         # Re-project to WGS84 for GeoJSON output
         gdf_wgs84 = gdf.to_crs("EPSG:4326")
 
+        # Full raster extent in WGS84 (may differ from detection bounds)
+        from rasterio.warp import transform_bounds as _tb
+        with rasterio.open(input_tif_path) as _src:
+            raster_bounds_wgs84 = list(_tb(_src.crs, "EPSG:4326", *_src.bounds))
+
         geojson = gdf_wgs84.__geo_interface__
         geojson["metadata"] = {
             "count": len(gdf_wgs84),
             "crs": str(first_crs),
-            "bounds": list(gdf_wgs84.total_bounds),
+            "raster_bounds": raster_bounds_wgs84,   # [W, S, E, N]
+            "detection_bounds": list(gdf_wgs84.total_bounds),  # [W, S, E, N]
         }
         return geojson
 
