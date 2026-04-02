@@ -24,3 +24,4 @@ tiles_temp_*/
 *.onnx
 node_modules/
 .DS_Store
+.worktrees/
