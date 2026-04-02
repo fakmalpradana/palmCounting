@@ -678,8 +678,19 @@
 
       try {
         const res  = await fetch('/api/inference', { method: 'POST', body: formData });
+        
+        if (!res.ok) {
+          if (res.status === 413) throw new Error('File is too large (413 Payload limit exceeded)');
+          const text = await res.text();
+          try {
+            const errData = JSON.parse(text);
+            throw new Error(errData.detail || `Server error ${res.status}`);
+          } catch(e) {
+            throw new Error(`Server error ${res.status}.`);
+          }
+        }
+        
         const data = await res.json();
-        if (!res.ok) throw new Error(data.detail || 'Server error');
 
         currentFileId = data.file_id;
         stopLoadingAnimation(data.geojson.metadata.count);

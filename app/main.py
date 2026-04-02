@@ -1,7 +1,7 @@
 # Copyright © 2026 Geo AI Twinverse.
 # Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -21,6 +21,10 @@ app.add_middleware(
 )
 
 app.include_router(inference_router.router)
+
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
 
 # Serve the frontend from ./static at root
 app.mount("/", StaticFiles(directory="static", html=True), name="static")
