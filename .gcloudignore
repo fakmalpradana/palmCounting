@@ -1,0 +1,53 @@
+# ============================================================
+# .gcloudignore — Palm Counter
+#
+# This file controls what gcloud excludes when uploading source
+# to Cloud Build via `gcloud builds submit`.
+#
+# The models/ directory is excluded here because the ONNX weights
+# (~28 MB) are stored in GCS and downloaded directly inside
+# Cloud Build (see cloudbuild.yaml Step 1), avoiding a slow
+# upload from the developer's machine.
+#
+# Note: .dockerignore is used by Docker itself; .gcloudignore is
+# used only by the gcloud CLI source upload step.
+# ============================================================
+
+# Use all rules from .gitignore
+.gcloudignore
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment / secrets
+.env
+
+# Large geodata (not needed in build)
+*.tif
+*.tiff
+uploads/
+output/
+results/
+data/
+
+# Model weights — downloaded from GCS during Cloud Build (see cloudbuild.yaml)
+models/
+
+# Dev-only scripts
+install_*.sh
+install_*.bat
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/

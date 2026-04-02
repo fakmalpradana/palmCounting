@@ -1,0 +1,92 @@
+# ============================================================
+# cloudbuild.yaml — Palm Counter CI/CD build pipeline
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+#
+# How it works:
+#   Step 1 → Download ONNX model weights from GCS into workspace
+#   Step 2 → Build the Docker image (multi-stage, cached)
+#   Step 3 → Push image to Artifact Registry
+#   Step 4 → Deploy new revision to Cloud Run (auto traffic migration)
+#
+# The model weights (~28 MB) live in GCS so they are NOT part of the
+# source upload from the developer's machine, keeping submissions fast.
+# ============================================================
+
+steps:
+  # ── Step 1a: Create models dir in workspace ────────────────
+  - name: 'ubuntu'
+    id: 'mkdir-models'
+    args: ['mkdir', '-p', '/workspace/models']
+
+  # ── Step 1b: Download model weights from GCS ─────────────────
+  - name: 'gcr.io/cloud-builders/gsutil'
+    id: 'fetch-model'
+    waitFor: ['mkdir-models']
+    args:
+      - '-m'
+      - 'cp'
+      - 'gs://palmcounting-models/models/best_1.onnx'
+      - 'gs://palmcounting-models/models/data.yaml'
+      - '/workspace/models/'
+
+  # ── Step 2: Build the Docker image ──────────────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'docker-build'
+    waitFor: ['fetch-model']
+    args:
+      - 'build'
+      - '--tag'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter:$COMMIT_SHA'
+      - '--tag'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter:latest'
+      - '--cache-from'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter:latest'
+      - '.'
+    # Preserve the downloaded models directory during docker build
+    # by temporarily removing it from .dockerignore scope:
+    # We copy the models folder into /workspace so Docker COPY . . picks it up
+    env:
+      - 'DOCKER_BUILDKIT=1'
+
+  # ── Step 3: Push image to Artifact Registry ──────────────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'docker-push'
+    waitFor: ['docker-build']
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter'
+
+  # ── Step 4: Deploy to Cloud Run ──────────────────────────────
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'cloud-run-deploy'
+    waitFor: ['docker-push']
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'palm-counter'
+      - '--image=asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter:$COMMIT_SHA'
+      - '--region=asia-southeast1'
+      - '--platform=managed'
+      - '--allow-unauthenticated'
+      - '--memory=2Gi'
+      - '--cpu=2'
+      - '--min-instances=0'
+      - '--max-instances=5'
+      - '--timeout=300'
+      - '--set-env-vars=PYTHONUNBUFFERED=1'
+      - '--quiet'
+
+# ── Image output declaration ─────────────────────────────────
+images:
+  - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter:$COMMIT_SHA'
+  - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter:latest'
+
+# ── Build options ─────────────────────────────────────────────
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'  # Faster build (~4 vCPU, 8 GB RAM)
+
+timeout: '1800s'  # 30-minute overall build timeout

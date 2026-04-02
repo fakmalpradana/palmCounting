@@ -1,0 +1,63 @@
+# ============================================================
+# .dockerignore — Palm Counter
+# Excludes large, sensitive, or dev-only files from the
+# Docker build context to keep images lean and secure.
+# ============================================================
+
+# Git
+.git/
+.gitignore
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+dist/
+build/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+.conda/
+
+# Environment / secrets
+.env
+*.env.*
+
+# Large geodata (uploaded at runtime, not baked in)
+*.tif
+*.tiff
+uploads/
+output/
+results/
+tiles_temp_*/
+data/
+
+# Conda / installation scripts (not needed in container)
+environment*.yml
+install_*.sh
+install_*.bat
+=1.18.0
+
+# IDEs / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# CI / docs
+.github/
+*.md
+DEPLOYMENT_REPORT.md
+
+# models/ is intentionally NOT excluded here.
+# Docker needs the ONNX weights + data.yaml baked into the image.
+# The source upload exclusion is handled by .gcloudignore (gcloud CLI only)
+# which excludes models/ from the gcloud build submit upload.
+# Cloud Build then downloads them from GCS before running docker build.
+# See cloudbuild.yaml Step 1 (fetch-model) and .gcloudignore.
