@@ -130,6 +130,8 @@ def check_and_increment_daily_upload(google_uid: str) -> dict:
     @firestore.transactional
     def _txn(transaction, ref):
         snap = ref.get(transaction=transaction)
+        if not snap.exists:
+            raise ValueError("User not found")
         data = snap.to_dict()
         last_date = data.get("last_upload_date", "")
         count = data.get("daily_upload_count", 0) if last_date == today else 0
