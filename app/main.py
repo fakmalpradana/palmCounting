@@ -6,6 +6,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
 from app.core.config import settings
+from app.routers import admin as admin_router
 from app.routers import auth as auth_router
 from app.routers import inference as inference_router
 
@@ -24,6 +25,7 @@ app.add_middleware(
 )
 
 app.include_router(auth_router.router)
+app.include_router(admin_router.router)
 app.include_router(inference_router.router)
 
 @app.get("/favicon.ico", include_in_schema=False)
