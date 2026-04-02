@@ -1,0 +1,105 @@
+# ============================================================
+# .github/workflows/deploy.yml — Palm Counter CI/CD Pipeline
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+#
+# Trigger: every push to the `main` branch
+#
+# Pipeline steps:
+#   1. Checkout source code
+#   2. Authenticate to GCP (Workload Identity Federation — keyless)
+#   3. Submit build to Cloud Build (cloudbuild.yaml):
+#        a. Download ONNX model from gs://palmcounting-models/
+#        b. Build Docker image with layer caching
+#        c. Push to Artifact Registry
+#        d. Deploy new revision to Cloud Run (auto traffic migration)
+#
+# Required GitHub Repository Secrets:
+#   ┌─────────────────────────────┬────────────────────────────────────────────────────────────────────────┐
+#   │ Secret Name                 │ Value                                                                  │
+#   ├─────────────────────────────┼────────────────────────────────────────────────────────────────────────┤
+#   │ WIF_PROVIDER                │ projects/981519809891/locations/global/workloadIdentityPools/           │
+#   │                             │   github-pool/providers/github-provider                                │
+#   │ WIF_SERVICE_ACCOUNT         │ github-actions-deploy@palmcounting.iam.gserviceaccount.com             │
+#   └─────────────────────────────┴────────────────────────────────────────────────────────────────────────┘
+#
+# See SETUP_SECRETS.md for step-by-step instructions on how to
+# create these secrets in your GitHub repository.
+# ============================================================
+
+name: 🚀 Deploy to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  # Allow manual trigger from GitHub Actions UI
+  workflow_dispatch:
+
+# ── Environment variables shared across all jobs ─────────────
+env:
+  PROJECT_ID:   palmcounting
+  REGION:       asia-southeast1
+  SERVICE_NAME: palm-counter
+
+# ── Permissions required for Workload Identity Federation ────
+permissions:
+  contents: read   # checkout code
+  id-token: write  # mint OIDC token for GCP auth
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────
+      - name: 📥 Checkout source
+        uses: actions/checkout@v4
+
+      # ── 2. Authenticate to GCP via Workload Identity ───────
+      - name: 🔐 Auth to GCP (Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      # ── 3. Set up gcloud CLI ───────────────────────────────
+      - name: ☁️ Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # ── 4. Submit to Cloud Build ───────────────────────────
+      # Uses cloudbuild.yaml in repo root, which:
+      #   Step 0: mkdir /workspace/models
+      #   Step 1: gsutil cp model weights from GCS
+      #   Step 2: docker build (with --cache-from latest)
+      #   Step 3: docker push --all-tags
+      #   Step 4: gcloud run deploy
+      - name: 🏗️ Build & Deploy via Cloud Build
+        run: |
+          gcloud builds submit \
+            --config=cloudbuild.yaml \
+            --project=${{ env.PROJECT_ID }} \
+            --substitutions=COMMIT_SHA=${{ github.sha }} \
+            --timeout=30m \
+            .
+
+      # ── 5. Print live URL ──────────────────────────────────
+      - name: 🌐 Print Service URL
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format="value(status.url)")
+          echo ""
+          echo "============================================="
+          echo "✅ DEPLOYMENT SUCCESSFUL"
+          echo "🌐 Live URL: $URL"
+          echo "📦 Commit:  ${{ github.sha }}"
+          echo "🕐 Time:    $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "============================================="
+          echo "service_url=$URL" >> $GITHUB_OUTPUT
+        id: get-url
