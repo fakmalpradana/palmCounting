@@ -166,7 +166,7 @@ async def infer(
 # ---------------------------------------------------------------------------
 
 @router.get("/download/{file_id}")
-def download_result(file_id: str, current_user: dict = Depends(get_current_user)):
+def download_result(file_id: str):
     _validate_file_id(file_id)
     path = RESULTS_DIR / f"{file_id}.geojson"
     if not path.exists():
@@ -183,7 +183,7 @@ def download_result(file_id: str, current_user: dict = Depends(get_current_user)
 # ---------------------------------------------------------------------------
 
 @router.get("/preview/{file_id}")
-def get_preview(file_id: str, current_user: dict = Depends(get_current_user)):
+def get_preview(file_id: str):
     _validate_file_id(file_id)
     path = UPLOAD_DIR / f"{file_id}.tif"
     if not path.exists():
