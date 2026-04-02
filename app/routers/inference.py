@@ -20,7 +20,8 @@ from pathlib import Path
 
 import numpy as np
 import rasterio
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from app.middleware.auth import get_current_user
 from fastapi.responses import JSONResponse, Response
 from PIL import Image
 from rasterio.warp import transform_bounds
@@ -113,6 +114,7 @@ async def infer(
     min_distance: float = Form(1.0),
     conf_threshold: float = Form(0.25),
     nms_threshold: float = Form(0.4),
+    current_user: dict = Depends(get_current_user),
 ):
     if not file.filename.lower().endswith((".tif", ".tiff")):
         raise HTTPException(400, "Only GeoTIFF files (.tif / .tiff) are accepted.")
@@ -164,7 +166,7 @@ async def infer(
 # ---------------------------------------------------------------------------
 
 @router.get("/download/{file_id}")
-def download_result(file_id: str):
+def download_result(file_id: str, current_user: dict = Depends(get_current_user)):
     _validate_file_id(file_id)
     path = RESULTS_DIR / f"{file_id}.geojson"
     if not path.exists():
@@ -181,7 +183,7 @@ def download_result(file_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/preview/{file_id}")
-def get_preview(file_id: str):
+def get_preview(file_id: str, current_user: dict = Depends(get_current_user)):
     _validate_file_id(file_id)
     path = UPLOAD_DIR / f"{file_id}.tif"
     if not path.exists():
@@ -230,14 +232,14 @@ def get_preview(file_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/models")
-def list_models():
+def list_models(current_user: dict = Depends(get_current_user)):
     """Return all .onnx files present in the models directory."""
     models = sorted(p.name for p in MODELS_DIR.glob("*.onnx"))
     return JSONResponse({"models": models})
 
 
 @router.post("/models")
-async def upload_model(file: UploadFile = File(...)):
+async def upload_model(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     """Upload a new ONNX model file to the models directory."""
     if not file.filename.lower().endswith(".onnx"):
         raise HTTPException(400, "Only .onnx model files are accepted.")
