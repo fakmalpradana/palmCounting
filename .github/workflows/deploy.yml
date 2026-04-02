@@ -41,6 +41,8 @@ env:
   PROJECT_ID:   palmcounting
   REGION:       asia-southeast1
   SERVICE_NAME: palm-counter
+  # Opt-in to Node.js 24 to suppress Node 20 deprecation warnings
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 # ── Permissions required for Workload Identity Federation ────
 permissions:
@@ -56,6 +58,14 @@ jobs:
       # ── 1. Checkout ────────────────────────────────────────
       - name: 📥 Checkout source
         uses: actions/checkout@v4
+
+      # ── 1.5 Verify Secrets are Set ─────────────────────────
+      - name: 🛡️ Verify Github Secrets
+        run: |
+          if [ -z "${{ secrets.WIF_PROVIDER }}" ] || [ -z "${{ secrets.WIF_SERVICE_ACCOUNT }}" ]; then
+            echo "::error title=Missing GitHub Secrets::Deployment failed because WIF_PROVIDER or WIF_SERVICE_ACCOUNT are missing! Please read SETUP_SECRETS.md and add them via your GitHub Repository Settings > Secrets and variables > Actions."
+            exit 1
+          fi
 
       # ── 2. Authenticate to GCP via Workload Identity ───────
       - name: 🔐 Auth to GCP (Workload Identity Federation)
