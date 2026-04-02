@@ -442,6 +442,42 @@
       transition: box-shadow 0.2s;
     }
     .btn-google-login:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
+
+    /* ============================================================
+       ADMIN PANEL OVERLAY
+    ============================================================ */
+    .admin-overlay {
+      position: fixed; inset: 0; background: rgba(0,0,0,0.85);
+      z-index: 2000; display: flex; align-items: center; justify-content: center;
+    }
+    .admin-modal {
+      background: #1a1a1a; border: 1px solid #333; border-radius: 8px;
+      padding: 2rem; width: 90%; max-width: 800px; max-height: 80vh;
+      overflow-y: auto;
+    }
+    .admin-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 1.5rem;
+    }
+    .admin-header h2 { color: #fff; margin: 0; font-size: 1.2rem; }
+    .btn-close { background: none; border: none; color: #888; font-size: 1.2rem; cursor: pointer; }
+    .admin-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; color: #ccc; }
+    .admin-table th {
+      border-bottom: 1px solid #333; padding: 0.5rem; text-align: left; color: #888;
+    }
+    .admin-table td { padding: 0.5rem; border-bottom: 1px solid #222; }
+    .role-badge { padding: 2px 8px; border-radius: 3px; font-size: 0.75rem; font-weight: 600; }
+    .role-user { background: #1a3a1a; color: #4caf50; }
+    .role-admin { background: #1a2a3a; color: #42a5f5; }
+    .role-superadmin { background: #3a1a1a; color: #ef5350; }
+    .token-input {
+      width: 70px; background: #111; border: 1px solid #444;
+      color: #fff; padding: 3px 6px; border-radius: 3px;
+    }
+    .btn-sm { padding: 3px 10px; font-size: 0.8rem; border: none; border-radius: 3px; cursor: pointer; }
+    .btn-add { background: #1b5e20; color: #a5d6a7; }
+    .btn-deduct { background: #b71c1c; color: #ef9a9a; }
+    .btn-promote { background: #0d47a1; color: #90caf9; }
   </style>
 </head>
 <body>
@@ -617,6 +653,27 @@
     </div>
   </div>
 
+  <!-- ── Admin Panel (overlay) ─────────────────────────── -->
+  <div id="admin-panel" style="display:none" class="admin-overlay">
+    <div class="admin-modal">
+      <div class="admin-header">
+        <h2>Admin Dashboard</h2>
+        <button onclick="hideAdminPanel()" class="btn-close">✕</button>
+      </div>
+      <div id="admin-content">
+        <table id="users-table" class="admin-table">
+          <thead>
+            <tr>
+              <th>Name</th><th>Email</th><th>Role</th>
+              <th>Tokens</th><th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="users-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
   <!-- Persistent footer (all screens) -->
   <footer class="app-footer">
     Copyright © 2026 <em>&nbsp;Geo AI Twinverse&nbsp;</em> · Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
@@ -708,8 +765,65 @@
       showScreen('screen-login');
     }
 
-    // Placeholder for admin panel (implemented in Step 2)
-    function showAdminPanel() {}
+    // ── Admin Panel ────────────────────────────────────────────────────────────
+    async function showAdminPanel() {
+      document.getElementById('admin-panel').style.display = 'flex';
+      await loadUsers();
+    }
+
+    function hideAdminPanel() {
+      document.getElementById('admin-panel').style.display = 'none';
+    }
+
+    async function loadUsers() {
+      const resp = await authFetch('/api/admin/users');
+      if (!resp.ok) return;
+      const { users } = await resp.json();
+      const tbody = document.getElementById('users-tbody');
+      tbody.innerHTML = users.map(u => `
+        <tr>
+          <td>${u.name}</td>
+          <td>${u.email}</td>
+          <td><span class="role-badge role-${u.role}">${u.role}</span></td>
+          <td id="bal-${u.uid}">${u.token_balance}</td>
+          <td>
+            <input type="number" id="delta-${u.uid}" class="token-input" placeholder="±amt" />
+            <button class="btn-sm btn-add" onclick="updateTokens('${u.uid}', 1)">Add</button>
+            <button class="btn-sm btn-deduct" onclick="updateTokens('${u.uid}', -1)">Deduct</button>
+            ${currentUser && currentUser.role === 'superadmin' && u.role !== 'superadmin'
+              ? `<button class="btn-sm btn-promote" onclick="toggleRole('${u.uid}', '${u.role}')">${u.role === 'admin' ? 'Demote' : 'Promote'}</button>`
+              : ''}
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    async function updateTokens(uid, sign) {
+      const raw = document.getElementById(`delta-${uid}`).value;
+      const amount = Math.abs(parseInt(raw, 10));
+      if (!amount || isNaN(amount)) { alert('Enter a valid amount'); return; }
+      const delta = sign * amount;
+      const resp = await authFetch(`/api/admin/users/${uid}/tokens`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ delta }),
+      });
+      if (!resp.ok) { alert('Failed to update tokens'); return; }
+      const { new_balance } = await resp.json();
+      document.getElementById(`bal-${uid}`).textContent = new_balance;
+    }
+
+    async function toggleRole(uid, currentRole) {
+      const newRole = currentRole === 'admin' ? 'user' : 'admin';
+      if (!confirm(`Change role to ${newRole}?`)) return;
+      const resp = await authFetch(`/api/admin/users/${uid}/role`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ role: newRole }),
+      });
+      if (!resp.ok) { alert('Failed to update role'); return; }
+      await loadUsers();
+    }
 
     // ----------------------------------------------------------
     // Model management
