@@ -61,5 +61,6 @@ async def update_role(
     try:
         await asyncio_to_thread_update_role(uid, body.role)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        status = 404 if "not found" in str(e).lower() else 400
+        raise HTTPException(status, str(e))
     return {"uid": uid, "role": body.role}
