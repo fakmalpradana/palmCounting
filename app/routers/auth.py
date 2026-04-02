@@ -168,5 +168,13 @@ async def me(current_user: dict = Depends(get_current_user)):
 @router.post("/logout")
 async def logout(current_user: dict = Depends(get_current_user)):
     response = JSONResponse({"message": "Logged out"})
-    response.set_cookie("refresh_token", "", max_age=0, path="/")
+    secure = _is_secure()
+    response.set_cookie(
+        "refresh_token", "",
+        max_age=0,
+        path="/",
+        httponly=True,
+        secure=secure,
+        samesite="strict" if secure else "lax",
+    )
     return response
