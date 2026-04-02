@@ -8,9 +8,11 @@
 /api/cleanup            — purge uploads & results older than MAX_AGE_HOURS (Cloud Scheduler hook).
 """
 
+import asyncio
 import io
 import json
 import logging
+import math
 import os
 import shutil
 import time
@@ -26,6 +28,7 @@ from fastapi.responses import JSONResponse, Response
 from PIL import Image
 from rasterio.warp import transform_bounds
 
+from app.core import firestore_client
 from app.core.inference import run_inference
 
 log = logging.getLogger(__name__)
@@ -102,6 +105,45 @@ def _purge_old_files(max_age_hours: int = MAX_AGE_HOURS) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Billing helpers
+# ---------------------------------------------------------------------------
+
+C_BASE = 50
+W_AREA = 10    # per hectare
+W_SIZE = 200   # per GB
+FREE_TIER_MAX_BYTES = 30 * 1024 * 1024   # 30 MB
+FREE_TIER_MAX_DAILY = 3
+
+
+def calculate_tokens(l_sqm: float, s_gb: float) -> int:
+    """Token cost: C_base + ((L_sqm / 10000) * W_area) + (S_gb * W_size)."""
+    return math.ceil(C_BASE + (l_sqm / 10_000) * W_AREA + s_gb * W_SIZE)
+
+
+def get_raster_area_sqm(tif_path: str) -> float:
+    """Read raster metadata and return area in square metres."""
+    with rasterio.open(tif_path) as src:
+        transform = src.transform
+        pixel_area = abs(transform.a * transform.e)
+        total_pixels = src.width * src.height
+        if src.crs and src.crs.is_geographic:
+            pixel_area = pixel_area * (111_000 ** 2)
+        return float(pixel_area * total_pixels)
+
+
+async def asyncio_to_thread_get_user(uid: str):
+    return await asyncio.to_thread(firestore_client.get_user, uid)
+
+
+async def asyncio_to_thread_check_daily(uid: str):
+    return await asyncio.to_thread(firestore_client.check_and_increment_daily_upload, uid)
+
+
+async def asyncio_to_thread_deduct_tokens(uid: str, amount: int):
+    return await asyncio.to_thread(firestore_client.deduct_tokens, uid, amount)
+
+
+# ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
 
@@ -119,18 +161,73 @@ async def infer(
     if not file.filename.lower().endswith((".tif", ".tiff")):
         raise HTTPException(400, "Only GeoTIFF files (.tif / .tiff) are accepted.")
 
+    # Read file bytes early — needed for size check before saving
+    file_bytes = await file.read()
+    file_size_bytes = len(file_bytes)
+    file_size_gb = file_size_bytes / (1024 ** 3)
+
+    # ── Fetch user for tier decision ─────────────────────────────────────
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance = user_data.get("token_balance", 0)
+
+    # ── Free tier pre-checks (fast-fail from cached user data) ───────────
+    if token_balance == 0:
+        if file_size_bytes > FREE_TIER_MAX_BYTES:
+            raise HTTPException(
+                413,
+                f"Free tier limit is 30 MB. Your file is "
+                f"{file_size_bytes / 1024 / 1024:.1f} MB. Add tokens to process larger files.",
+            )
+        today = __import__("datetime").date.today().isoformat()
+        last_date = user_data.get("last_upload_date", "")
+        count = user_data.get("daily_upload_count", 0) if last_date == today else 0
+        if count >= FREE_TIER_MAX_DAILY:
+            raise HTTPException(
+                429,
+                "Free tier daily limit reached (3 uploads/day). Add tokens for unlimited access.",
+            )
+
+    # ── Model / YAML checks ──────────────────────────────────────────────
     model_path = MODELS_DIR / model_name
     if not model_path.exists():
         raise HTTPException(404, f"Model '{model_name}' not found. Upload it first.")
     if not YAML_PATH.exists():
         raise HTTPException(500, f"data.yaml not found at {YAML_PATH}")
 
-    # Persist upload
+    # ── Save upload ──────────────────────────────────────────────────────
     file_id = str(uuid.uuid4())
     raster_path = UPLOAD_DIR / f"{file_id}.tif"
-    raster_path.write_bytes(await file.read())
+    raster_path.write_bytes(file_bytes)
 
-    # Timed inference
+    # ── Commercial tier: calculate + deduct tokens ───────────────────────
+    tokens_deducted = 0
+    if token_balance > 0:
+        l_sqm = await asyncio.to_thread(get_raster_area_sqm, str(raster_path))
+        cost = calculate_tokens(l_sqm=l_sqm, s_gb=file_size_gb)
+        if cost > token_balance:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(
+                402,
+                f"Insufficient tokens: have {token_balance}, need {cost}",
+            )
+        try:
+            await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+            tokens_deducted = cost
+        except ValueError as e:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(402, str(e))
+    else:
+        # ── Free tier: atomic daily counter increment ────────────────────
+        try:
+            await asyncio_to_thread_check_daily(current_user["sub"])
+        except ValueError:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(429, "Free tier daily limit reached.")
+
+    # ── Inference (unchanged) ────────────────────────────────────────────
     t0 = time.perf_counter()
     try:
         geojson = run_inference(
@@ -157,6 +254,7 @@ async def infer(
     return JSONResponse({
         "file_id": file_id,
         "duration_seconds": duration,
+        "tokens_deducted": tokens_deducted,
         "geojson": geojson,
     })
 
