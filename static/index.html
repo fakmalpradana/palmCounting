@@ -390,14 +390,93 @@
       font-size: 9px; letter-spacing: 0.14em; color: var(--text-dim);
     }
     .app-footer em { color: var(--text-muted); font-style: normal; }
+
+    /* ============================================================
+       USER HEADER BAR
+    ============================================================ */
+    .user-header {
+      position: fixed; top: 0; right: 0;
+      display: flex; align-items: center; gap: 1rem;
+      padding: 0.5rem 1.5rem;
+      background: rgba(0,0,0,0.7); color: #ccc;
+      font-size: 0.8rem; z-index: 1000;
+      border-bottom-left-radius: 6px;
+    }
+    .token-rate { color: #666; font-size: 0.75rem; }
+
+    /* ============================================================
+       LOGIN SCREEN
+    ============================================================ */
+    .login-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      gap: 1.5rem;
+      background: #0a0a0a;
+    }
+    .login-title {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 3.5rem;
+      letter-spacing: 0.15em;
+      color: #fff;
+      margin: 0;
+    }
+    .login-subtitle {
+      color: #888;
+      font-size: 0.9rem;
+      margin: 0;
+    }
+    .btn-google-login {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      background: #fff;
+      color: #333;
+      padding: 0.75rem 1.5rem;
+      border-radius: 4px;
+      text-decoration: none;
+      font-size: 0.95rem;
+      font-weight: 500;
+      transition: box-shadow 0.2s;
+    }
+    .btn-google-login:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
   </style>
 </head>
 <body>
 
+  <div class="user-header" id="user-header" style="display:none">
+    <span id="user-name"></span>
+    <span class="token-info">
+      Tokens: <strong id="token-balance">0</strong>
+      <span class="token-rate">(1 Token = IDR 1.000)</span>
+    </span>
+    <a href="#" id="admin-link" style="display:none" onclick="showAdminPanel(); return false;">Admin</a>
+    <a href="#" onclick="logout(); return false;">Logout</a>
+  </div>
+
+  <!-- ── Login Screen ─────────────────────────────────── -->
+  <div id="screen-login" class="screen active">
+    <div class="login-container">
+      <h1 class="login-title">PALM COUNTER</h1>
+      <p class="login-subtitle">WebGIS YOLO Detection Platform</p>
+      <a href="/api/auth/login" class="btn-google-login">
+        <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+          <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
+          <path d="M9 18c2.43 0 4.467-.806 5.956-2.18l-2.908-2.259c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332A8.997 8.997 0 0 0 9 18z" fill="#34A853"/>
+          <path d="M3.964 10.71A5.41 5.41 0 0 1 3.682 9c0-.593.102-1.17.282-1.71V4.958H.957A8.996 8.996 0 0 0 0 9c0 1.452.348 2.827.957 4.042l3.007-2.332z" fill="#FBBC05"/>
+          <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0A8.997 8.997 0 0 0 .957 4.958L3.964 6.29C4.672 4.163 6.656 3.58 9 3.58z" fill="#EA4335"/>
+        </svg>
+        Sign in with Google
+      </a>
+    </div>
+  </div>
+
   <!-- ======================================================
        SCREEN 1 — UPLOAD
   ====================================================== -->
-  <div id="screen-upload" class="screen active">
+  <div id="screen-upload" class="screen">
     <div class="brackets"><span></span></div>
     <div class="sys-label">SYS/<span>YOLO-ONNX</span> · REV 1.0.0</div>
 
@@ -549,13 +628,88 @@
   <script>
     'use strict';
 
-    // ----------------------------------------------------------
-    // Screen manager
-    // ----------------------------------------------------------
+    // ── Auth state (in memory only — never persisted) ──────────────────────
+    let accessToken = null;
+    let currentUser = null;
+
+    // ── Screen management ──────────────────────────────────────────────────
     function showScreen(id) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
-      document.getElementById(id).classList.add('active');
+      const el = document.getElementById(id);
+      if (el) el.classList.add('active');
     }
+
+    // ── Auth initialization (runs on every page load) ──────────────────────
+    async function initAuth() {
+      try {
+        const resp = await fetch('/api/auth/refresh', {
+          method: 'POST',
+          credentials: 'include',
+        });
+        if (!resp.ok) throw new Error('No session');
+        const data = await resp.json();
+        accessToken = data.access_token;
+        currentUser = data.user;
+        onAuthSuccess();
+      } catch {
+        showScreen('screen-login');
+      }
+    }
+
+    function onAuthSuccess() {
+      document.getElementById('user-header').style.display = 'flex';
+      updateUserHeader();
+      showScreen('screen-upload');
+    }
+
+    function updateUserHeader() {
+      const balanceEl = document.getElementById('token-balance');
+      const nameEl = document.getElementById('user-name');
+      const adminLink = document.getElementById('admin-link');
+      if (balanceEl) balanceEl.textContent = currentUser.token_balance.toLocaleString();
+      if (nameEl) nameEl.textContent = currentUser.name;
+      if (adminLink) {
+        adminLink.style.display = ['admin', 'superadmin'].includes(currentUser.role) ? 'inline' : 'none';
+      }
+    }
+
+    // ── Authenticated fetch wrapper (auto-retries once on 401) ─────────────
+    async function authFetch(url, options = {}) {
+      options.headers = { ...(options.headers || {}), 'Authorization': `Bearer ${accessToken}` };
+      let resp = await fetch(url, options);
+      if (resp.status === 401) {
+        try {
+          const r = await fetch('/api/auth/refresh', { method: 'POST', credentials: 'include' });
+          if (!r.ok) throw new Error();
+          const d = await r.json();
+          accessToken = d.access_token;
+          currentUser = d.user;
+          options.headers['Authorization'] = `Bearer ${accessToken}`;
+          resp = await fetch(url, options);
+        } catch {
+          showScreen('screen-login');
+          throw new Error('Session expired');
+        }
+      }
+      return resp;
+    }
+
+    async function logout() {
+      try {
+        await fetch('/api/auth/logout', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${accessToken}` },
+          credentials: 'include',
+        });
+      } catch (_) {}
+      accessToken = null;
+      currentUser = null;
+      document.getElementById('user-header').style.display = 'none';
+      showScreen('screen-login');
+    }
+
+    // Placeholder for admin panel (implemented in Step 2)
+    function showAdminPanel() {}
 
     // ----------------------------------------------------------
     // Model management
@@ -566,7 +720,7 @@
 
     async function loadModels(selectValue) {
       try {
-        const res  = await fetch('/api/models');
+        const res  = await authFetch('/api/models');
         const data = await res.json();
         modelSelect.innerHTML = data.models.length
           ? data.models.map(m => `<option value="${m}"${m === selectValue ? ' selected' : ''}>${m}</option>`).join('')
@@ -586,7 +740,7 @@
       const fd = new FormData();
       fd.append('file', file);
       try {
-        const res  = await fetch('/api/models', { method: 'POST', body: fd });
+        const res  = await authFetch('/api/models', { method: 'POST', body: fd });
         const data = await res.json();
         if (!res.ok) throw new Error(data.detail || 'Upload failed');
         modelStatus.style.color = 'var(--success)';
@@ -599,8 +753,10 @@
       modelFileInput.value = '';
     });
 
-    // Load on page load
-    loadModels();
+    // Boot: silent refresh → show login or upload
+    document.addEventListener('DOMContentLoaded', () => {
+      initAuth();
+    });
 
     // ----------------------------------------------------------
     // File upload / drop zone
@@ -677,7 +833,7 @@
       startLoadingAnimation();
 
       try {
-        const res  = await fetch('/api/inference', { method: 'POST', body: formData });
+        const res  = await authFetch('/api/inference', { method: 'POST', body: formData });
         
         if (!res.ok) {
           if (res.status === 413) throw new Error('File is too large (413 Payload limit exceeded)');
