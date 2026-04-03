@@ -20,8 +20,9 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=[settings.frontend_url, "http://localhost:8080"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS", "PATCH"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 app.include_router(auth_router.router)
