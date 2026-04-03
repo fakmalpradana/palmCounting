@@ -14,10 +14,10 @@
 # ============================================================
 
 steps:
-  # ── Step 1a: Create models dir in workspace ────────────────
+  # ── Step 1a: Create model dirs in workspace ────────────────
   - name: 'ubuntu'
     id: 'mkdir-models'
-    args: ['mkdir', '-p', '/workspace/models']
+    args: ['bash', '-c', 'mkdir -p /workspace/models /workspace/app/models/default']
 
   # ── Step 1b: Download model weights from GCS ─────────────────
   - name: 'gcr.io/cloud-builders/gsutil'
@@ -30,10 +30,20 @@ steps:
       - 'gs://palmcounting-models/models/data.yaml'
       - '/workspace/models/'
 
+  # ── Step 1c: Copy default model into app/models/default/ so it is
+  #    baked into the Docker image via COPY . . and survives scale-to-zero
+  - name: 'ubuntu'
+    id: 'copy-default-model'
+    waitFor: ['fetch-model']
+    args:
+      - 'bash'
+      - '-c'
+      - 'cp /workspace/models/best_1.onnx /workspace/app/models/default/best_1.onnx && cp /workspace/models/data.yaml /workspace/app/models/default/data.yaml'
+
   # ── Step 2: Build the Docker image ──────────────────────────
   - name: 'gcr.io/cloud-builders/docker'
     id: 'docker-build'
-    waitFor: ['fetch-model']
+    waitFor: ['copy-default-model']
     args:
       - 'build'
       - '--tag'
