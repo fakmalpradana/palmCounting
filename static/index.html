@@ -482,9 +482,50 @@
     /* ============================================================
        TIER BADGE
     ============================================================ */
-    .tier-badge { font-size: 0.8rem; padding: 0.4rem 0.8rem; border-radius: 4px; margin-bottom: 1rem; }
+    .tier-badge { font-size: 0.8rem; padding: 0.4rem 0.8rem; border-radius: 4px; margin-bottom: 0.5rem; }
     .tier-free { background: #1a2a1a; color: #81c784; border: 1px solid #2e4d2e; }
     .tier-commercial { background: #1a1a2a; color: #90caf9; border: 1px solid #2e3d5e; }
+
+    /* Token Guide button */
+    .btn-token-guide {
+      background: none; border: 1px solid var(--border-hi); color: var(--text-muted);
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.12em;
+      text-transform: uppercase; padding: 4px 10px; cursor: pointer;
+      margin-bottom: 14px; transition: color 0.2s, border-color 0.2s;
+    }
+    .btn-token-guide:hover { color: var(--amber); border-color: var(--amber); }
+
+    /* Token Guide modal */
+    .token-modal-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.78); z-index: 9999;
+      align-items: center; justify-content: center;
+    }
+    .token-modal-overlay.open { display: flex; }
+    .token-modal {
+      background: var(--bg-card); border: 1px solid var(--border-hi);
+      border-left: 3px solid var(--amber); padding: 28px 32px;
+      width: min(480px, 92vw); position: relative;
+    }
+    .token-modal h2 {
+      font-family: var(--font-display); font-size: 22px;
+      letter-spacing: 0.06em; color: var(--amber); margin-bottom: 16px;
+    }
+    .token-modal table { width: 100%; border-collapse: collapse; font-size: 12px; margin-bottom: 14px; }
+    .token-modal td { padding: 6px 8px; border-bottom: 1px solid var(--border); color: var(--text); }
+    .token-modal td:first-child { color: var(--text-muted); white-space: nowrap; }
+    .token-modal .formula-box {
+      background: var(--bg-surface); border: 1px solid var(--border);
+      padding: 10px 14px; font-size: 11px; color: var(--lime); letter-spacing: 0.05em;
+      margin-bottom: 18px;
+    }
+    .token-modal .btn-close {
+      background: var(--border-hi); border: none; color: var(--text);
+      font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em;
+      text-transform: uppercase; padding: 8px 20px; cursor: pointer;
+      transition: background 0.2s;
+    }
+    .token-modal .btn-close:hover { background: var(--amber); color: #000; }
   </style>
 </head>
 <body>
@@ -528,6 +569,7 @@
       <div class="tagline">YOLO ONNX · Geospatial Detection · GeoJSON Output</div>
 
       <div id="tier-info" class="tier-badge"></div>
+      <button class="btn-token-guide" onclick="showTokenGuide()">? Token Guide</button>
 
       <!-- Raster upload -->
       <div class="dropzone" id="dropzone">
@@ -691,12 +733,36 @@
   <!-- ======================================================
        JAVASCRIPT
   ====================================================== -->
+  <!-- Token Guide Modal -->
+  <div id="token-guide-modal" class="token-modal-overlay" onclick="if(event.target===this)hideTokenGuide()">
+    <div class="token-modal">
+      <h2>TOKEN GUIDE</h2>
+      <table>
+        <tr><td>1 Token</td><td>= IDR 1,000</td></tr>
+        <tr><td>Free Tier</td><td>Max 30 MB · 3 uploads/day · 0 tokens</td></tr>
+        <tr><td>Commercial</td><td>Unlimited size & uploads · pay-per-use</td></tr>
+      </table>
+      <div class="formula-box">
+        Cost (tokens) = 50 &nbsp;+&nbsp; (Area in Ha &times; 10) &nbsp;+&nbsp; (Size in GB &times; 200)
+      </div>
+      <button class="btn-close" onclick="hideTokenGuide()">Close</button>
+    </div>
+  </div>
+
   <script>
     'use strict';
 
     // ── Auth state (in memory only — never persisted) ──────────────────────
     let accessToken = null;
     let currentUser = null;
+
+    // ── Token Guide modal ──────────────────────────────────────────────────
+    function showTokenGuide() {
+      document.getElementById('token-guide-modal').classList.add('open');
+    }
+    function hideTokenGuide() {
+      document.getElementById('token-guide-modal').classList.remove('open');
+    }
 
     // ── Screen management ──────────────────────────────────────────────────
     function showScreen(id) {
@@ -949,40 +1015,81 @@
     // ----------------------------------------------------------
     // Run inference
     // ----------------------------------------------------------
+
+    function inferenceParams(chosenModel) {
+      return {
+        model_name:     chosenModel,
+        conf_threshold: parseFloat(document.getElementById('conf').value),
+        nms_threshold:  parseFloat(document.getElementById('nms').value),
+        min_distance:   parseFloat(document.getElementById('min-dist').value),
+        tile_width:     parseInt(document.getElementById('tile-size').value, 10),
+        tile_height:    parseInt(document.getElementById('tile-size').value, 10),
+      };
+    }
+
+    async function parseErrorResponse(res) {
+      const text = await res.text();
+      try { return JSON.parse(text).detail || `Server error ${res.status}`; }
+      catch(_) { return `Server error ${res.status}`; }
+    }
+
+    // Free-tier path: POST file directly (≤30 MB, within Cloud Run 32 MB limit)
+    async function runFreeTierInference(file, params) {
+      const formData = new FormData();
+      formData.append('file', file);
+      Object.entries(params).forEach(([k, v]) => formData.append(k, v));
+      const res = await authFetch('/api/inference', { method: 'POST', body: formData });
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      return res.json();
+    }
+
+    // Commercial path: signed URL → PUT to GCS → submit gcs_path for inference
+    async function runCommercialInference(file, params) {
+      // Step 1: get signed URL
+      const presignRes = await authFetch('/api/upload/signed-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename: file.name, file_size_bytes: file.size }),
+      });
+      if (!presignRes.ok) throw new Error('Failed to get upload URL: ' + await parseErrorResponse(presignRes));
+      const { upload_url, gcs_path } = await presignRes.json();
+
+      // Step 2: PUT file directly to GCS (bypasses Cloud Run 32 MB limit)
+      const putRes = await fetch(upload_url, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'image/tiff' },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
+
+      // Step 3: trigger inference with gcs_path
+      const submitRes = await authFetch('/api/inference/submit', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ gcs_path, ...params }),
+      });
+      if (!submitRes.ok) throw new Error(await parseErrorResponse(submitRes));
+      return submitRes.json();
+    }
+
     btnRun.addEventListener('click', async () => {
       if (!selectedFile) return;
       const chosenModel = modelSelect.value;
       if (!chosenModel) { errorMsg.textContent = '⚠ Select a model first.'; errorMsg.style.display = 'block'; return; }
 
       errorMsg.style.display = 'none';
-
-      const formData = new FormData();
-      formData.append('file',           selectedFile);
-      formData.append('model_name',     chosenModel);
-      formData.append('conf_threshold', document.getElementById('conf').value);
-      formData.append('nms_threshold',  document.getElementById('nms').value);
-      formData.append('min_distance',   document.getElementById('min-dist').value);
-      formData.append('tile_width',     document.getElementById('tile-size').value);
-      formData.append('tile_height',    document.getElementById('tile-size').value);
-
       showScreen('screen-loading');
       startLoadingAnimation();
 
       try {
-        const res  = await authFetch('/api/inference', { method: 'POST', body: formData });
-        
-        if (!res.ok) {
-          if (res.status === 413) throw new Error('File is too large (413 Payload limit exceeded)');
-          const text = await res.text();
-          try {
-            const errData = JSON.parse(text);
-            throw new Error(errData.detail || `Server error ${res.status}`);
-          } catch(e) {
-            throw new Error(`Server error ${res.status}.`);
-          }
-        }
-        
-        const data = await res.json();
+        const params = inferenceParams(chosenModel);
+        // Commercial users (token_balance > 0) upload via GCS signed URL to bypass
+        // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤30 MB).
+        const isCommercial = currentUser && currentUser.token_balance > 0;
+        const data = isCommercial
+          ? await runCommercialInference(selectedFile, params)
+          : await runFreeTierInference(selectedFile, params);
+
         if (data.tokens_deducted > 0) {
           currentUser.token_balance -= data.tokens_deducted;
           updateUserHeader();
