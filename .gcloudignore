@@ -40,8 +40,10 @@ output/
 results/
 data/
 
-# Model weights — downloaded from GCS during Cloud Build (see cloudbuild.yaml)
-models/
+# Root-level model weights — downloaded from GCS during Cloud Build (see cloudbuild.yaml).
+# Use a leading slash so this only excludes /models/ at the project root,
+# NOT app/models/default/ which contains the baked-in default bundle.
+/models/
 
 # Dev-only scripts
 install_*.sh

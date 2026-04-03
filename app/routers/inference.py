@@ -425,6 +425,10 @@ def list_models(current_user: dict = Depends(get_current_user)):
     """Return all .onnx models: baked-in defaults + user-uploaded custom models."""
     defaults = {p.name for p in DEFAULT_MODELS_DIR.glob("*.onnx")}
     custom   = {p.name for p in MODELS_DIR.glob("*.onnx")}
+    log.info(
+        "list_models — DEFAULT_MODELS_DIR=%s defaults=%s custom=%s",
+        DEFAULT_MODELS_DIR, sorted(defaults), sorted(custom),
+    )
     return JSONResponse({"models": sorted(defaults | custom)})
 
 
