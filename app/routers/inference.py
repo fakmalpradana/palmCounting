@@ -17,9 +17,10 @@ import os
 import shutil
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import numpy as np
 import rasterio
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -28,7 +29,11 @@ from fastapi.responses import JSONResponse, Response
 from PIL import Image
 from rasterio.warp import transform_bounds
 
+from google.cloud import storage as gcs
+from pydantic import BaseModel
+
 from app.core import firestore_client
+from app.core.config import settings
 from app.core.inference import run_inference
 
 log = logging.getLogger(__name__)
@@ -141,6 +146,22 @@ async def asyncio_to_thread_check_daily(uid: str):
 
 async def asyncio_to_thread_deduct_tokens(uid: str, amount: int):
     return await asyncio.to_thread(firestore_client.deduct_tokens, uid, amount)
+
+
+def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
+    """Generate a GCS signed PUT URL valid for 1 hour. Returns (url, gcs_path)."""
+    client = gcs.Client(project=settings.firestore_project_id)
+    bucket = client.bucket(settings.gcs_bucket_name)
+    safe_name = "".join(c for c in filename if c.isalnum() or c in ("_", "-", "."))
+    gcs_path = f"uploads/{user_uid}/{uuid.uuid4().hex}_{safe_name}"
+    blob = bucket.blob(gcs_path)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(hours=1),
+        method="PUT",
+        content_type="image/tiff",
+    )
+    return url, gcs_path
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +373,105 @@ async def upload_model(file: UploadFile = File(...), current_user: dict = Depend
     dest = MODELS_DIR / safe_name
     dest.write_bytes(await file.read())
     return JSONResponse({"message": f"Model '{safe_name}' uploaded.", "model_name": safe_name})
+
+# ---------------------------------------------------------------------------
+# GCS presign + GPU submit (commercial tier)
+# ---------------------------------------------------------------------------
+
+class PresignRequest(BaseModel):
+    filename: str
+    file_size_bytes: int
+
+
+class SubmitRequest(BaseModel):
+    gcs_path: str
+    model_name: str = "best_1.onnx"
+    tile_width: int = 640
+    tile_height: int = 640
+    min_distance: float = 1.0
+    conf_threshold: float = 0.25
+    nms_threshold: float = 0.4
+
+
+@router.post("/inference/presign")
+async def presign_upload(
+    body: PresignRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Commercial tier only: get a GCS signed URL for direct large-file upload."""
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data or user_data.get("token_balance", 0) <= 0:
+        raise HTTPException(403, "Presigned upload is for commercial tier only (requires token balance > 0)")
+
+    try:
+        upload_url, gcs_path = await asyncio.to_thread(
+            generate_signed_upload_url, current_user["sub"], body.filename
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to generate signed URL: {e}")
+
+    return {"upload_url": upload_url, "gcs_path": gcs_path}
+
+
+@router.post("/inference/submit")
+async def submit_gcs_inference(
+    body: SubmitRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Commercial tier: run inference on a file already uploaded to GCS."""
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data or user_data.get("token_balance", 0) <= 0:
+        raise HTTPException(403, "Submit endpoint is for commercial tier only")
+
+    # Validate path ownership — must start with uploads/{uid}/
+    expected_prefix = f"uploads/{current_user['sub']}/"
+    if not body.gcs_path.startswith(expected_prefix):
+        raise HTTPException(403, "gcs_path does not belong to the authenticated user")
+
+    # Pre-check: ensure minimum balance to reduce result-loss on token deduction failure
+    C_BASE = 50  # minimum possible token cost
+    if user_data.get("token_balance", 0) < C_BASE:
+        raise HTTPException(402, "Insufficient token balance to initiate GPU inference")
+
+    # Forward to GPU worker
+    if not settings.gpu_worker_url:
+        raise HTTPException(503, "GPU worker not configured")
+
+    async with httpx.AsyncClient(timeout=3600) as http:
+        try:
+            gpu_resp = await http.post(
+                f"{settings.gpu_worker_url}/api/inference/internal",
+                json={
+                    "gcs_path": body.gcs_path,
+                    "model_name": body.model_name,
+                    "tile_width": body.tile_width,
+                    "tile_height": body.tile_height,
+                    "min_distance": body.min_distance,
+                    "conf_threshold": body.conf_threshold,
+                    "nms_threshold": body.nms_threshold,
+                    "user_uid": current_user["sub"],
+                },
+                headers={"X-Internal-Secret": settings.cleanup_secret},
+            )
+        except Exception as e:
+            raise HTTPException(502, f"GPU worker unreachable: {e}")
+
+    if gpu_resp.status_code != 200:
+        raise HTTPException(gpu_resp.status_code, f"GPU worker error: {gpu_resp.text}")
+
+    result = gpu_resp.json()
+
+    # Deduct tokens based on actual file stats returned by GPU worker
+    l_sqm = result.get("area_sqm", 0.0)
+    s_gb = result.get("file_size_gb", 0.0)
+    cost = calculate_tokens(l_sqm=l_sqm, s_gb=s_gb)
+    try:
+        await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+    except ValueError as e:
+        raise HTTPException(402, str(e))
+
+    return JSONResponse({**result, "tokens_deducted": cost})
+
 
 # ---------------------------------------------------------------------------
 # Cleanup

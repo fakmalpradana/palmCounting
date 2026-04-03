@@ -100,3 +100,35 @@ def test_commercial_tier_insufficient_tokens(client, access_token, mocker):
         headers={"Authorization": f"Bearer {access_token}"},
     )
     assert resp.status_code == 402
+
+
+def test_presign_requires_commercial_tier(client, access_token, mocker):
+    """Free tier (balance=0) cannot use presigned upload."""
+    mocker.patch("app.routers.inference.asyncio_to_thread_get_user", return_value={
+        "uid": "uid123", "email": "t@t.com", "role": "user", "token_balance": 0,
+        "daily_upload_count": 0, "last_upload_date": "",
+    })
+    resp = client.post(
+        "/api/inference/presign",
+        json={"filename": "large.tif", "file_size_bytes": 1024 * 1024 * 100},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resp.status_code == 403
+
+
+def test_presign_returns_upload_url(client, access_token, mocker):
+    mocker.patch("app.routers.inference.asyncio_to_thread_get_user", return_value={
+        "uid": "uid123", "email": "t@t.com", "role": "user", "token_balance": 5000,
+        "daily_upload_count": 0, "last_upload_date": "",
+    })
+    mocker.patch("app.routers.inference.generate_signed_upload_url",
+                 return_value=("https://storage.googleapis.com/signed", "uploads/uid123/file.tif"))
+    resp = client.post(
+        "/api/inference/presign",
+        json={"filename": "large.tif", "file_size_bytes": 1024 * 1024 * 100},
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "upload_url" in data
+    assert "gcs_path" in data
