@@ -57,6 +57,10 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(exist_ok=True)
 
+# Default model baked into the Docker image — survives scale-to-zero
+DEFAULT_MODELS_DIR = Path("app/models/default")
+DEFAULT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
+
 RESULTS_DIR = Path("results")
 RESULTS_DIR.mkdir(exist_ok=True)
 
@@ -64,6 +68,27 @@ OUTPUT_DIR = Path("output")
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 YAML_PATH = MODELS_DIR / "data.yaml"
+
+
+def _resolve_model_path(model_name: str) -> Path:
+    """Return model path, checking user-uploaded dir then baked-in default dir."""
+    p = MODELS_DIR / model_name
+    if p.exists():
+        return p
+    p = DEFAULT_MODELS_DIR / model_name
+    if p.exists():
+        return p
+    return MODELS_DIR / model_name  # not found — caller raises 404
+
+
+def _resolve_yaml_path() -> Path:
+    """Return data.yaml path, preferring user models dir, then default bundle."""
+    if YAML_PATH.exists():
+        return YAML_PATH
+    default_yaml = DEFAULT_MODELS_DIR / "data.yaml"
+    if default_yaml.exists():
+        return default_yaml
+    return YAML_PATH  # not found — caller raises 500
 
 # Directories managed by the cleanup routine
 _CLEANUP_DIRS = [UPLOAD_DIR, RESULTS_DIR, OUTPUT_DIR]
@@ -198,8 +223,8 @@ async def infer(
     if token_balance == 0:
         if file_size_bytes > FREE_TIER_MAX_BYTES:
             raise HTTPException(
-                413,
-                f"Free tier limit is 30 MB. Your file is "
+                403,
+                f"Quota exceeded: free tier limit is 30 MB. Your file is "
                 f"{file_size_bytes / 1024 / 1024:.1f} MB. Add tokens to process larger files.",
             )
         today = __import__("datetime").date.today().isoformat()
@@ -207,16 +232,17 @@ async def infer(
         count = user_data.get("daily_upload_count", 0) if last_date == today else 0
         if count >= FREE_TIER_MAX_DAILY:
             raise HTTPException(
-                429,
-                "Free tier daily limit reached (3 uploads/day). Add tokens for unlimited access.",
+                403,
+                "Quota exceeded: free tier allows 3 uploads/day. Add tokens for unlimited access.",
             )
 
     # ── Model / YAML checks ──────────────────────────────────────────────
-    model_path = MODELS_DIR / model_name
+    model_path = _resolve_model_path(model_name)
     if not model_path.exists():
         raise HTTPException(404, f"Model '{model_name}' not found. Upload it first.")
-    if not YAML_PATH.exists():
-        raise HTTPException(500, f"data.yaml not found at {YAML_PATH}")
+    yaml_path = _resolve_yaml_path()
+    if not yaml_path.exists():
+        raise HTTPException(500, f"data.yaml not found at {yaml_path}")
 
     # ── Save upload ──────────────────────────────────────────────────────
     file_id = str(uuid.uuid4())
@@ -254,7 +280,7 @@ async def infer(
         geojson = run_inference(
             input_tif_path=str(raster_path),
             model_path=str(model_path),
-            yaml_path=str(YAML_PATH),
+            yaml_path=str(yaml_path),
             tile_width=tile_width,
             tile_height=tile_height,
             min_distance=min_distance,
@@ -352,9 +378,10 @@ def get_preview(file_id: str):
 
 @router.get("/models")
 def list_models(current_user: dict = Depends(get_current_user)):
-    """Return all .onnx files present in the models directory."""
-    models = sorted(p.name for p in MODELS_DIR.glob("*.onnx"))
-    return JSONResponse({"models": models})
+    """Return all .onnx models: baked-in defaults + user-uploaded custom models."""
+    defaults = {p.name for p in DEFAULT_MODELS_DIR.glob("*.onnx")}
+    custom   = {p.name for p in MODELS_DIR.glob("*.onnx")}
+    return JSONResponse({"models": sorted(defaults | custom)})
 
 
 @router.post("/models")
@@ -391,6 +418,26 @@ class SubmitRequest(BaseModel):
     min_distance: float = 1.0
     conf_threshold: float = 0.25
     nms_threshold: float = 0.4
+
+
+@router.post("/upload/signed-url")
+async def get_signed_upload_url(
+    body: PresignRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Generate a GCS signed PUT URL for direct browser-to-GCS upload.
+
+    Available to all authenticated users. Billing is enforced at inference time.
+    """
+    if not settings.gcs_bucket_name:
+        raise HTTPException(503, "GCS upload is not configured on this server.")
+    try:
+        upload_url, gcs_path = await asyncio.to_thread(
+            generate_signed_upload_url, current_user["sub"], body.filename
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to generate signed URL: {e}")
+    return {"upload_url": upload_url, "gcs_path": gcs_path}
 
 
 @router.post("/inference/presign")
