@@ -57,8 +57,10 @@ UPLOAD_DIR.mkdir(exist_ok=True)
 MODELS_DIR = Path("models")
 MODELS_DIR.mkdir(exist_ok=True)
 
-# Default model baked into the Docker image — survives scale-to-zero
-DEFAULT_MODELS_DIR = Path("app/models/default")
+# Default model baked into the Docker image — survives scale-to-zero.
+# Use an absolute path derived from __file__ so this resolves correctly
+# regardless of the working directory (local dev vs Docker WORKDIR /app).
+DEFAULT_MODELS_DIR = (Path(__file__).resolve().parent.parent / "models" / "default")
 DEFAULT_MODELS_DIR.mkdir(parents=True, exist_ok=True)
 
 RESULTS_DIR = Path("results")

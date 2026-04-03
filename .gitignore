@@ -21,7 +21,9 @@ ENV/
 *.cpg
 output/
 tiles_temp_*/
+# Exclude large model weights globally, but allow the baked-in default bundle
 *.onnx
+!app/models/default/*.onnx
 node_modules/
 .DS_Store
 .worktrees/
