@@ -173,19 +173,47 @@ async def asyncio_to_thread_deduct_tokens(uid: str, amount: int):
     return await asyncio.to_thread(firestore_client.deduct_tokens, uid, amount)
 
 
+def _get_service_account_email() -> str | None:
+    """Fetch the active service account email from the GCE metadata server.
+
+    On Cloud Run / GCE this returns the real SA email (e.g.
+    123-compute@developer.gserviceaccount.com). Returns None when running
+    outside GCP (local dev), in which case the caller falls back to the
+    credentials object.
+    """
+    import urllib.error
+    import urllib.request
+
+    url = (
+        "http://metadata.google.internal"
+        "/computeMetadata/v1/instance/service-accounts/default/email"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"Metadata-Flavor": "Google"})
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.read().decode().strip()
+    except Exception:
+        return None
+
+
 def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
     """Generate a GCS signed PUT URL valid for 1 hour. Returns (url, gcs_path).
 
-    Uses IAM-based signing so this works on Cloud Run (Compute Engine credentials
-    have no private key — passing service_account_email + access_token delegates
-    signing to the IAM signBlob API instead of a local key file).
+    Uses the IAM Credentials API for signing so this works on Cloud Run where
+    the default Compute Engine credentials contain only a token (no private key).
+    The service account email is retrieved dynamically from the GCE metadata
+    server so we never hard-code it.  Falls back to the credentials object when
+    running locally with a service-account key file.
     """
     import google.auth
     import google.auth.transport.requests
 
     credentials, _ = google.auth.default()
-    # Refresh to ensure the access token is current
     credentials.refresh(google.auth.transport.requests.Request())
+
+    # Prefer the metadata server: it returns the real SA email on Cloud Run.
+    # Fall back to credentials.service_account_email for local dev with SA keys.
+    sa_email = _get_service_account_email() or credentials.service_account_email
 
     client = gcs.Client(project=settings.firestore_project_id, credentials=credentials)
     bucket = client.bucket(settings.gcs_bucket_name)
@@ -197,7 +225,7 @@ def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
         expiration=timedelta(hours=1),
         method="PUT",
         content_type="image/tiff",
-        service_account_email=credentials.service_account_email,
+        service_account_email=sa_email,
         access_token=credentials.token,
     )
     return url, gcs_path
