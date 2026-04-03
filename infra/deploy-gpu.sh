@@ -33,7 +33,7 @@ gcloud run deploy "${SERVICE}" \
   --min-instances=0 \
   --max-instances=3 \
   --timeout=3600 \
-    --set-env-vars="^:^FIRESTORE_PROJECT_ID=${PROJECT_ID}:GCS_BUCKET_NAME=${GCS_BUCKET_NAME:-palmcounting-uploads}:CLEANUP_SECRET=${CLEANUP_SECRET}:PYTHONUNBUFFERED=1"
+    --set-env-vars="^@^FIRESTORE_PROJECT_ID=${PROJECT_ID}@GCS_BUCKET_NAME=${GCS_BUCKET_NAME:-palmcounting-uploads}@CLEANUP_SECRET=${CLEANUP_SECRET}@PYTHONUNBUFFERED=1"
 
 echo "GPU service deployed."
 GPU_URL=$(gcloud run services describe "${SERVICE}" \
