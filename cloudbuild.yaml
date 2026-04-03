@@ -76,8 +76,7 @@ steps:
       - '--min-instances=0'
       - '--max-instances=5'
       - '--timeout=300'
-      - >-
-        --update-env-vars=^:^PYTHONUNBUFFERED=1:FIRESTORE_PROJECT_ID=$PROJECT_ID:FRONTEND_URL=https://palm-counter-981519809891.asia-southeast1.run.app
+      - '--update-env-vars=PYTHONUNBUFFERED=1,FIRESTORE_PROJECT_ID=$PROJECT_ID,FRONTEND_URL=https://palm-counter-981519809891.asia-southeast1.run.app'
       - '--quiet'
 
 # ── Image output declaration ─────────────────────────────────
