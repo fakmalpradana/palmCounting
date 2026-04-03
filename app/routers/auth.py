@@ -4,9 +4,13 @@ from __future__ import annotations
 import asyncio
 import secrets
 
+import logging
+import traceback
+
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
+from google.api_core import exceptions as gcp_exceptions
 from jose import JWTError
 from jose import jwt as jose_jwt
 
@@ -110,7 +114,11 @@ async def callback(code: str, state: str, request: Request):
         name = google_payload.get("name", email)
         avatar = google_payload.get("picture", "")
 
-        user = await asyncio_to_thread_upsert_user(google_uid, email, name, avatar)
+        try:
+            user = await asyncio_to_thread_upsert_user(google_uid, email, name, avatar)
+        except gcp_exceptions.GoogleAPICallError as exc:
+            logging.error("Firestore upsert_user failed: %s\n%s", exc, traceback.format_exc())
+            raise HTTPException(500, f"Database error during login: {type(exc).__name__}: {exc}")
 
         access_token = create_access_token({"sub": google_uid, "email": email, "role": user["role"]})
         refresh_token = create_refresh_token({"sub": google_uid})
@@ -123,8 +131,6 @@ async def callback(code: str, state: str, request: Request):
     except HTTPException:
         raise
     except Exception as exc:
-        import logging
-        import traceback
         logging.error("OAuth callback error: %s\n%s", exc, traceback.format_exc())
         raise HTTPException(500, f"OAuth callback failed: {type(exc).__name__}: {exc}")
 
