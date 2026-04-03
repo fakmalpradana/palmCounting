@@ -174,8 +174,20 @@ async def asyncio_to_thread_deduct_tokens(uid: str, amount: int):
 
 
 def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
-    """Generate a GCS signed PUT URL valid for 1 hour. Returns (url, gcs_path)."""
-    client = gcs.Client(project=settings.firestore_project_id)
+    """Generate a GCS signed PUT URL valid for 1 hour. Returns (url, gcs_path).
+
+    Uses IAM-based signing so this works on Cloud Run (Compute Engine credentials
+    have no private key — passing service_account_email + access_token delegates
+    signing to the IAM signBlob API instead of a local key file).
+    """
+    import google.auth
+    import google.auth.transport.requests
+
+    credentials, _ = google.auth.default()
+    # Refresh to ensure the access token is current
+    credentials.refresh(google.auth.transport.requests.Request())
+
+    client = gcs.Client(project=settings.firestore_project_id, credentials=credentials)
     bucket = client.bucket(settings.gcs_bucket_name)
     safe_name = "".join(c for c in filename if c.isalnum() or c in ("_", "-", "."))
     gcs_path = f"uploads/{user_uid}/{uuid.uuid4().hex}_{safe_name}"
@@ -185,6 +197,8 @@ def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
         expiration=timedelta(hours=1),
         method="PUT",
         content_type="image/tiff",
+        service_account_email=credentials.service_account_email,
+        access_token=credentials.token,
     )
     return url, gcs_path
 
