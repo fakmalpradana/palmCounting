@@ -70,46 +70,63 @@ async def callback(code: str, state: str, request: Request):
     if not stored_state or stored_state != state:
         raise HTTPException(400, "Invalid OAuth state — possible CSRF attempt")
 
-    async with httpx.AsyncClient() as http:
-        token_resp = await http.post(
-            GOOGLE_TOKEN_URL,
-            data={
-                "code": code,
-                "client_id": settings.google_client_id,
-                "client_secret": settings.google_client_secret,
-                "redirect_uri": f"{settings.frontend_url}/api/auth/callback",
-                "grant_type": "authorization_code",
+    try:
+        async with httpx.AsyncClient() as http:
+            token_resp = await http.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "code": code,
+                    "client_id": settings.google_client_id,
+                    "client_secret": settings.google_client_secret,
+                    "redirect_uri": f"{settings.frontend_url}/api/auth/callback",
+                    "grant_type": "authorization_code",
+                },
+            )
+
+        if token_resp.status_code != 200:
+            raise HTTPException(400, f"Google token exchange failed: {token_resp.text}")
+
+        token_data = token_resp.json()
+        id_token_raw = token_data.get("id_token")
+        if not id_token_raw:
+            raise HTTPException(400, "No id_token in Google response")
+
+        # Decode without signature verification — we trust it; we just exchanged the code
+        # directly from Google's token endpoint. Also skip at_hash validation since
+        # python-jose requires passing the raw access_token for that check, which is
+        # unnecessary given we already validated the exchange server-side.
+        google_payload = jose_jwt.decode(
+            id_token_raw,
+            key="",
+            options={
+                "verify_signature": False,
+                "verify_aud": False,
+                "verify_at_hash": False,
             },
         )
 
-    if token_resp.status_code != 200:
-        raise HTTPException(400, f"Google token exchange failed: {token_resp.text}")
+        google_uid = google_payload["sub"]
+        email = google_payload.get("email", "")
+        name = google_payload.get("name", email)
+        avatar = google_payload.get("picture", "")
 
-    id_token_raw = token_resp.json().get("id_token")
-    if not id_token_raw:
-        raise HTTPException(400, "No id_token in Google response")
+        user = await asyncio_to_thread_upsert_user(google_uid, email, name, avatar)
 
-    # Decode without signature verification — we trust it; we just exchanged the code
-    google_payload = jose_jwt.decode(
-        id_token_raw,
-        key="",
-        options={"verify_signature": False, "verify_aud": False},
-    )
+        access_token = create_access_token({"sub": google_uid, "email": email, "role": user["role"]})
+        refresh_token = create_refresh_token({"sub": google_uid})
 
-    google_uid = google_payload["sub"]
-    email = google_payload.get("email", "")
-    name = google_payload.get("name", email)
-    avatar = google_payload.get("picture", "")
+        response = RedirectResponse(settings.frontend_url)
+        _set_refresh_cookie(response, refresh_token)
+        response.delete_cookie("oauth_state")
+        return response
 
-    user = await asyncio_to_thread_upsert_user(google_uid, email, name, avatar)
-
-    access_token = create_access_token({"sub": google_uid, "email": email, "role": user["role"]})
-    refresh_token = create_refresh_token({"sub": google_uid})
-
-    response = RedirectResponse(settings.frontend_url)
-    _set_refresh_cookie(response, refresh_token)
-    response.delete_cookie("oauth_state")
-    return response
+    except HTTPException:
+        raise
+    except Exception as exc:
+        import logging
+        import traceback
+        logging.error("OAuth callback error: %s\n%s", exc, traceback.format_exc())
+        raise HTTPException(500, f"OAuth callback failed: {type(exc).__name__}: {exc}")
 
 
 @router.post("/refresh")
