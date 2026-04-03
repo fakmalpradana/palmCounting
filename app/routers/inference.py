@@ -8,23 +8,32 @@
 /api/cleanup            — purge uploads & results older than MAX_AGE_HOURS (Cloud Scheduler hook).
 """
 
+import asyncio
 import io
 import json
 import logging
+import math
 import os
 import shutil
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import numpy as np
 import rasterio
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from app.middleware.auth import get_current_user
 from fastapi.responses import JSONResponse, Response
 from PIL import Image
 from rasterio.warp import transform_bounds
 
+from google.cloud import storage as gcs
+from pydantic import BaseModel
+
+from app.core import firestore_client
+from app.core.config import settings
 from app.core.inference import run_inference
 
 log = logging.getLogger(__name__)
@@ -101,6 +110,61 @@ def _purge_old_files(max_age_hours: int = MAX_AGE_HOURS) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Billing helpers
+# ---------------------------------------------------------------------------
+
+C_BASE = 50
+W_AREA = 10    # per hectare
+W_SIZE = 200   # per GB
+FREE_TIER_MAX_BYTES = 30 * 1024 * 1024   # 30 MB
+FREE_TIER_MAX_DAILY = 3
+
+
+def calculate_tokens(l_sqm: float, s_gb: float) -> int:
+    """Token cost: C_base + ((L_sqm / 10000) * W_area) + (S_gb * W_size)."""
+    return math.ceil(C_BASE + (l_sqm / 10_000) * W_AREA + s_gb * W_SIZE)
+
+
+def get_raster_area_sqm(tif_path: str) -> float:
+    """Read raster metadata and return area in square metres."""
+    with rasterio.open(tif_path) as src:
+        transform = src.transform
+        pixel_area = abs(transform.a * transform.e)
+        total_pixels = src.width * src.height
+        if src.crs and src.crs.is_geographic:
+            pixel_area = pixel_area * (111_000 ** 2)
+        return float(pixel_area * total_pixels)
+
+
+async def asyncio_to_thread_get_user(uid: str):
+    return await asyncio.to_thread(firestore_client.get_user, uid)
+
+
+async def asyncio_to_thread_check_daily(uid: str):
+    return await asyncio.to_thread(firestore_client.check_and_increment_daily_upload, uid)
+
+
+async def asyncio_to_thread_deduct_tokens(uid: str, amount: int):
+    return await asyncio.to_thread(firestore_client.deduct_tokens, uid, amount)
+
+
+def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
+    """Generate a GCS signed PUT URL valid for 1 hour. Returns (url, gcs_path)."""
+    client = gcs.Client(project=settings.firestore_project_id)
+    bucket = client.bucket(settings.gcs_bucket_name)
+    safe_name = "".join(c for c in filename if c.isalnum() or c in ("_", "-", "."))
+    gcs_path = f"uploads/{user_uid}/{uuid.uuid4().hex}_{safe_name}"
+    blob = bucket.blob(gcs_path)
+    url = blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(hours=1),
+        method="PUT",
+        content_type="image/tiff",
+    )
+    return url, gcs_path
+
+
+# ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
 
@@ -113,22 +177,78 @@ async def infer(
     min_distance: float = Form(1.0),
     conf_threshold: float = Form(0.25),
     nms_threshold: float = Form(0.4),
+    current_user: dict = Depends(get_current_user),
 ):
     if not file.filename.lower().endswith((".tif", ".tiff")):
         raise HTTPException(400, "Only GeoTIFF files (.tif / .tiff) are accepted.")
 
+    # Read file bytes early — needed for size check before saving
+    file_bytes = await file.read()
+    file_size_bytes = len(file_bytes)
+    file_size_gb = file_size_bytes / (1024 ** 3)
+
+    # ── Fetch user for tier decision ─────────────────────────────────────
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance = user_data.get("token_balance", 0)
+
+    # ── Free tier pre-checks (fast-fail from cached user data) ───────────
+    if token_balance == 0:
+        if file_size_bytes > FREE_TIER_MAX_BYTES:
+            raise HTTPException(
+                413,
+                f"Free tier limit is 30 MB. Your file is "
+                f"{file_size_bytes / 1024 / 1024:.1f} MB. Add tokens to process larger files.",
+            )
+        today = __import__("datetime").date.today().isoformat()
+        last_date = user_data.get("last_upload_date", "")
+        count = user_data.get("daily_upload_count", 0) if last_date == today else 0
+        if count >= FREE_TIER_MAX_DAILY:
+            raise HTTPException(
+                429,
+                "Free tier daily limit reached (3 uploads/day). Add tokens for unlimited access.",
+            )
+
+    # ── Model / YAML checks ──────────────────────────────────────────────
     model_path = MODELS_DIR / model_name
     if not model_path.exists():
         raise HTTPException(404, f"Model '{model_name}' not found. Upload it first.")
     if not YAML_PATH.exists():
         raise HTTPException(500, f"data.yaml not found at {YAML_PATH}")
 
-    # Persist upload
+    # ── Save upload ──────────────────────────────────────────────────────
     file_id = str(uuid.uuid4())
     raster_path = UPLOAD_DIR / f"{file_id}.tif"
-    raster_path.write_bytes(await file.read())
+    raster_path.write_bytes(file_bytes)
 
-    # Timed inference
+    # ── Commercial tier: calculate + deduct tokens ───────────────────────
+    tokens_deducted = 0
+    if token_balance > 0:
+        l_sqm = await asyncio.to_thread(get_raster_area_sqm, str(raster_path))
+        cost = calculate_tokens(l_sqm=l_sqm, s_gb=file_size_gb)
+        if cost > token_balance:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(
+                402,
+                f"Insufficient tokens: have {token_balance}, need {cost}",
+            )
+        try:
+            await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+            tokens_deducted = cost
+        except ValueError as e:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(402, str(e))
+    else:
+        # ── Free tier: atomic daily counter increment ────────────────────
+        try:
+            await asyncio_to_thread_check_daily(current_user["sub"])
+        except ValueError:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(429, "Free tier daily limit reached.")
+
+    # ── Inference (unchanged) ────────────────────────────────────────────
     t0 = time.perf_counter()
     try:
         geojson = run_inference(
@@ -155,6 +275,7 @@ async def infer(
     return JSONResponse({
         "file_id": file_id,
         "duration_seconds": duration,
+        "tokens_deducted": tokens_deducted,
         "geojson": geojson,
     })
 
@@ -230,14 +351,14 @@ def get_preview(file_id: str):
 # ---------------------------------------------------------------------------
 
 @router.get("/models")
-def list_models():
+def list_models(current_user: dict = Depends(get_current_user)):
     """Return all .onnx files present in the models directory."""
     models = sorted(p.name for p in MODELS_DIR.glob("*.onnx"))
     return JSONResponse({"models": models})
 
 
 @router.post("/models")
-async def upload_model(file: UploadFile = File(...)):
+async def upload_model(file: UploadFile = File(...), current_user: dict = Depends(get_current_user)):
     """Upload a new ONNX model file to the models directory."""
     if not file.filename.lower().endswith(".onnx"):
         raise HTTPException(400, "Only .onnx model files are accepted.")
@@ -252,6 +373,105 @@ async def upload_model(file: UploadFile = File(...)):
     dest = MODELS_DIR / safe_name
     dest.write_bytes(await file.read())
     return JSONResponse({"message": f"Model '{safe_name}' uploaded.", "model_name": safe_name})
+
+# ---------------------------------------------------------------------------
+# GCS presign + GPU submit (commercial tier)
+# ---------------------------------------------------------------------------
+
+class PresignRequest(BaseModel):
+    filename: str
+    file_size_bytes: int
+
+
+class SubmitRequest(BaseModel):
+    gcs_path: str
+    model_name: str = "best_1.onnx"
+    tile_width: int = 640
+    tile_height: int = 640
+    min_distance: float = 1.0
+    conf_threshold: float = 0.25
+    nms_threshold: float = 0.4
+
+
+@router.post("/inference/presign")
+async def presign_upload(
+    body: PresignRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Commercial tier only: get a GCS signed URL for direct large-file upload."""
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data or user_data.get("token_balance", 0) <= 0:
+        raise HTTPException(403, "Presigned upload is for commercial tier only (requires token balance > 0)")
+
+    try:
+        upload_url, gcs_path = await asyncio.to_thread(
+            generate_signed_upload_url, current_user["sub"], body.filename
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Failed to generate signed URL: {e}")
+
+    return {"upload_url": upload_url, "gcs_path": gcs_path}
+
+
+@router.post("/inference/submit")
+async def submit_gcs_inference(
+    body: SubmitRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Commercial tier: run inference on a file already uploaded to GCS."""
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data or user_data.get("token_balance", 0) <= 0:
+        raise HTTPException(403, "Submit endpoint is for commercial tier only")
+
+    # Validate path ownership — must start with uploads/{uid}/
+    expected_prefix = f"uploads/{current_user['sub']}/"
+    if not body.gcs_path.startswith(expected_prefix):
+        raise HTTPException(403, "gcs_path does not belong to the authenticated user")
+
+    # Pre-check: ensure minimum balance to reduce result-loss on token deduction failure
+    C_BASE = 50  # minimum possible token cost
+    if user_data.get("token_balance", 0) < C_BASE:
+        raise HTTPException(402, "Insufficient token balance to initiate GPU inference")
+
+    # Forward to GPU worker
+    if not settings.gpu_worker_url:
+        raise HTTPException(503, "GPU worker not configured")
+
+    async with httpx.AsyncClient(timeout=3600) as http:
+        try:
+            gpu_resp = await http.post(
+                f"{settings.gpu_worker_url}/api/inference/internal",
+                json={
+                    "gcs_path": body.gcs_path,
+                    "model_name": body.model_name,
+                    "tile_width": body.tile_width,
+                    "tile_height": body.tile_height,
+                    "min_distance": body.min_distance,
+                    "conf_threshold": body.conf_threshold,
+                    "nms_threshold": body.nms_threshold,
+                    "user_uid": current_user["sub"],
+                },
+                headers={"X-Internal-Secret": settings.cleanup_secret},
+            )
+        except Exception as e:
+            raise HTTPException(502, f"GPU worker unreachable: {e}")
+
+    if gpu_resp.status_code != 200:
+        raise HTTPException(gpu_resp.status_code, f"GPU worker error: {gpu_resp.text}")
+
+    result = gpu_resp.json()
+
+    # Deduct tokens based on actual file stats returned by GPU worker
+    l_sqm = result.get("area_sqm", 0.0)
+    s_gb = result.get("file_size_gb", 0.0)
+    cost = calculate_tokens(l_sqm=l_sqm, s_gb=s_gb)
+    try:
+        await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+    except ValueError as e:
+        raise HTTPException(402, str(e))
+
+    return JSONResponse({**result, "tokens_deducted": cost})
+
 
 # ---------------------------------------------------------------------------
 # Cleanup

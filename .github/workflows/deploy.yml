@@ -113,3 +113,12 @@ jobs:
           echo "============================================="
           echo "service_url=$URL" >> $GITHUB_OUTPUT
         id: get-url
+
+      # ── 5. Remind about secrets ────────────────────────────────
+      - name: Post-deploy secrets reminder
+        run: |
+          echo "============================================="
+          echo "REMINDER: Set these secrets via Cloud Run if not already done:"
+          echo "   GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, JWT_SECRET"
+          echo "   Run: bash infra/deploy-cpu.sh  (with env vars set)"
+          echo "============================================="
