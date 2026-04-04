@@ -46,8 +46,15 @@ COPY requirements.txt .
 RUN pip install --upgrade pip --no-cache-dir \
  && pip install --no-cache-dir -r requirements.txt
 
+# Explicitly bake in the default model weights so the container is
+# self-contained and survives Cloud Run scale-to-zero without a GCS fetch.
+# This must be copied BEFORE the general COPY so it is never overwritten by
+# an empty directory from the build context (Cloud Build clears /models/ root
+# but never touches app/models/default/).
+COPY app/models/ ./app/models/
+
 # Copy full application source
-# Note: models/ is pre-populated by Cloud Build step "fetch-model"
+# Note: models/ (root-level) is pre-populated by Cloud Build step "fetch-model"
 # which downloads from gs://palmcounting-models/models/ before docker build.
 COPY . .
 

@@ -792,6 +792,7 @@
       document.getElementById('user-header').style.display = 'flex';
       updateUserHeader();
       updateTierInfo();
+      loadModels();
       showScreen('screen-upload');
     }
 
@@ -921,14 +922,22 @@
     const modelStatus    = document.getElementById('model-upload-status');
 
     async function loadModels(selectValue) {
+      modelSelect.innerHTML = '<option value="">Loading models…</option>';
       try {
         const res  = await authFetch('/api/models');
+        if (!res.ok) throw new Error(`Server error ${res.status}`);
         const data = await res.json();
-        modelSelect.innerHTML = data.models.length
-          ? data.models.map(m => `<option value="${m}"${m === selectValue ? ' selected' : ''}>${m}</option>`).join('')
-          : '<option value="">No models found</option>';
-      } catch {
-        modelSelect.innerHTML = '<option value="">Error loading models</option>';
+        if (!data.models || data.models.length === 0) {
+          modelSelect.innerHTML = '<option value="">No models found</option>';
+          return;
+        }
+        // Auto-select: prefer explicit selectValue, then best_1.onnx, then first
+        const defaultSel = selectValue || (data.models.includes('best_1.onnx') ? 'best_1.onnx' : data.models[0]);
+        modelSelect.innerHTML = data.models
+          .map(m => `<option value="${m}"${m === defaultSel ? ' selected' : ''}>${m}</option>`)
+          .join('');
+      } catch (err) {
+        modelSelect.innerHTML = `<option value="">⚠ ${err.message}</option>`;
       }
     }
 
