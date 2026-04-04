@@ -1,0 +1,135 @@
+# ============================================================
+# .github/workflows/deploy-gpu.yml — Palm Counter GPU CI/CD
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+#
+# Deploys the COMMERCIAL TIER GPU worker service (palm-counter-gpu)
+# to Cloud Run with NVIDIA L4 GPU on every push to `main`.
+#
+# Parallel to deploy.yml which handles the CPU free-tier service.
+#
+# Pipeline:
+#   1. Checkout source
+#   2. Authenticate to GCP (Workload Identity Federation — keyless)
+#   3. Submit cloudbuild-gpu.yaml to Cloud Build:
+#        a. Download ONNX model weights from GCS
+#        b. Build GPU Docker image (Dockerfile.gpu · CUDA 12.2)
+#        c. Push to Artifact Registry as palm-counter-gpu:$SHA
+#        d. Deploy palm-counter-gpu Cloud Run service
+#             --execution-environment=gen2
+#             --gpu=1 --gpu-type=nvidia-l4
+#             --cpu=4 --memory=16Gi
+#             --no-cpu-throttling
+#   4. Print GPU service URL
+#   5. Remind to wire GPU_WORKER_URL into the CPU service
+#
+# Secrets required (same as deploy.yml):
+#   WIF_PROVIDER          — Workload Identity Pool provider
+#   WIF_SERVICE_ACCOUNT   — github-actions-deploy@palmcounting.iam.gserviceaccount.com
+#
+# One-time manual setup before first deploy:
+#   bash infra/setup-gpu-sa.sh   (creates palm-counter-gpu service account)
+# ============================================================
+
+name: 🚀 Deploy GPU Service to Cloud Run
+
+on:
+  push:
+    branches:
+      - main
+  # Allow manual trigger from GitHub Actions UI (useful for GPU cost control)
+  workflow_dispatch:
+
+env:
+  PROJECT_ID:       palmcounting
+  REGION:           asia-southeast1
+  GPU_SERVICE_NAME: palm-counter-gpu
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy-gpu:
+    name: Build & Deploy GPU Service
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── 1. Checkout ────────────────────────────────────────
+      - name: 📥 Checkout source
+        uses: actions/checkout@v4
+
+      # ── 1.5 Verify Secrets ─────────────────────────────────
+      - name: 🛡️ Verify GitHub Secrets
+        run: |
+          if [ -z "${{ secrets.WIF_PROVIDER }}" ] || [ -z "${{ secrets.WIF_SERVICE_ACCOUNT }}" ]; then
+            echo "::error title=Missing GitHub Secrets::WIF_PROVIDER or WIF_SERVICE_ACCOUNT not set. See SETUP_SECRETS.md."
+            exit 1
+          fi
+
+      # ── 2. Authenticate to GCP ─────────────────────────────
+      - name: 🔐 Auth to GCP (Workload Identity Federation)
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      # ── 3. Set up gcloud CLI ───────────────────────────────
+      - name: ☁️ Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      # ── 4. Submit GPU build to Cloud Build ─────────────────
+      # Uses cloudbuild-gpu.yaml which:
+      #   Step 1: Downloads ONNX weights from GCS
+      #   Step 2: Builds Dockerfile.gpu (nvidia/cuda:12.2 + onnxruntime-gpu)
+      #   Step 3: Pushes palm-counter-gpu image to Artifact Registry
+      #   Step 4: Deploys palm-counter-gpu Cloud Run service with L4 GPU flags
+      - name: 🏗️ Build & Deploy GPU Service via Cloud Build
+        run: |
+          gcloud builds submit \
+            --config=cloudbuild-gpu.yaml \
+            --project=${{ env.PROJECT_ID }} \
+            --substitutions=COMMIT_SHA=${{ github.sha }} \
+            --timeout=40m \
+            .
+
+      # ── 5. Print GPU service URL ───────────────────────────
+      - name: 🌐 Print GPU Service URL
+        id: get-gpu-url
+        run: |
+          GPU_URL=$(gcloud run services describe ${{ env.GPU_SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format="value(status.url)")
+          echo ""
+          echo "============================================="
+          echo "✅ GPU DEPLOYMENT SUCCESSFUL"
+          echo "🌐 GPU Service URL : $GPU_URL"
+          echo "📦 Commit          : ${{ github.sha }}"
+          echo "🕐 Time            : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "============================================="
+          echo "gpu_service_url=$GPU_URL" >> $GITHUB_OUTPUT
+
+      # ── 6. Wire GPU_WORKER_URL reminder ───────────────────
+      - name: 🔗 Wire GPU_WORKER_URL into CPU service
+        run: |
+          GPU_URL=$(gcloud run services describe ${{ env.GPU_SERVICE_NAME }} \
+            --region=${{ env.REGION }} \
+            --project=${{ env.PROJECT_ID }} \
+            --format="value(status.url)")
+          echo ""
+          echo "============================================="
+          echo "ACTION REQUIRED — wire the GPU service into the CPU service:"
+          echo ""
+          echo "  export GPU_WORKER_URL=$GPU_URL"
+          echo "  bash infra/deploy-cpu.sh"
+          echo ""
+          echo "Or update it directly:"
+          echo "  gcloud run services update palm-counter \\"
+          echo "    --region=asia-southeast1 \\"
+          echo "    --update-env-vars=GPU_WORKER_URL=$GPU_URL"
+          echo "============================================="

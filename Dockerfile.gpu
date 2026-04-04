@@ -1,0 +1,81 @@
+# ============================================================
+# Palm Counter — GPU Dockerfile for Cloud Run (NVIDIA L4 · CUDA 12.2)
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+#
+# Strategy:
+#   • nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+#     Matches Cloud Run NVIDIA L4 driver 535.x / CUDA 12.2 exactly.
+#   • Python 3.11 installed via deadsnakes PPA
+#   • onnxruntime-gpu replaces onnxruntime — inference.py auto-selects
+#     CUDAExecutionProvider when it is available (no code changes needed).
+#   • Non-root USER nobody for GCP security policy.
+#   • --no-cpu-throttling required in Cloud Run deploy (GPU keeps CPU busy).
+# ============================================================
+
+FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+# ── System deps: Python 3.11 + geospatial libraries ───────────────────────
+# Ubuntu 22.04 ships Python 3.10; use deadsnakes PPA for 3.11.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        software-properties-common ca-certificates curl \
+    && add-apt-repository -y ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
+        python3.11 \
+        python3.11-dev \
+        python3.11-distutils \
+        # GDAL / GEOS / PROJ runtime libs
+        libgdal-dev \
+        libgeos-dev \
+        libproj-dev \
+        # rtree spatial index
+        libspatialindex-dev \
+        # OpenCV headless runtime
+        libgl1 \
+        libglib2.0-0 \
+        # Build tools (needed for native pip wheels)
+        gcc \
+        g++ \
+    && curl -sS https://bootstrap.pypa.io/get-pip.py | python3.11 \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && rm -rf /var/lib/apt/lists/*
+
+# Set working directory
+WORKDIR /app
+
+# ── Python dependencies ────────────────────────────────────────────────────
+# Separate layer for build-cache efficiency.
+# requirements-cloudrun-gpu.txt = full production deps + onnxruntime-gpu
+COPY requirements-cloudrun-gpu.txt .
+RUN pip install --upgrade pip --no-cache-dir \
+ && pip install --no-cache-dir -r requirements-cloudrun-gpu.txt
+
+# ── Bake in default model weights ─────────────────────────────────────────
+# Survive scale-to-zero without a GCS fetch on cold start.
+COPY app/models/ ./app/models/
+
+# ── Copy full application source ───────────────────────────────────────────
+# models/ (root-level) is pre-populated by Cloud Build step "fetch-model"
+# which downloads from gs://palmcounting-models/ before docker build runs.
+COPY . .
+
+# ── Runtime directories ────────────────────────────────────────────────────
+RUN mkdir -p uploads results output \
+ && chown -R nobody:nogroup uploads results output /app
+
+# Run as non-root for GCP security policy
+USER nobody
+
+# Cloud Run injects PORT at runtime (default 8080)
+ENV PORT=8080
+ENV PYTHONUNBUFFERED=1
+
+# Hint onnxruntime-gpu to use max cuDNN workspace for conv layers
+ENV ORT_CUDA_PROVIDER_OPTIONS="cudnn_conv_use_max_workspace=1"
+
+# Single worker — GPU memory is not shareable across worker processes.
+# containerConcurrency=1 is set in the Cloud Run deploy flags (cloudbuild-gpu.yaml).
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 3600 --log-level info

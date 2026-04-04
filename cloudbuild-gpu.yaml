@@ -1,0 +1,127 @@
+# ============================================================
+# cloudbuild-gpu.yaml — Palm Counter GPU build pipeline
+# Copyright © 2026 Geo AI Twinverse.
+# Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+#
+# Deploys the commercial-tier GPU worker service (palm-counter-gpu).
+# Triggered by .github/workflows/deploy-gpu.yml on every push to main.
+#
+# Architecture:
+#   palm-counter (CPU, this repo's cloudbuild.yaml) — free tier
+#   palm-counter-gpu (GPU, THIS file)               — commercial tier
+#   The CPU service calls the GPU service via GPU_WORKER_URL when
+#   the user has a token balance > 0.
+#
+# Prerequisites (one-time manual setup):
+#   1. bash infra/setup-gpu-sa.sh          — create GPU service account
+#   2. GPU quota confirmed for asia-southeast1 (auto-granted for new projects)
+#   3. GPU_WORKER_URL set in CPU service:
+#        bash infra/deploy-cpu.sh GPU_WORKER_URL=<url from step 4 log>
+# ============================================================
+
+steps:
+  # ── Step 1a: Create model dirs ────────────────────────────
+  - name: 'ubuntu'
+    id: 'mkdir-models'
+    args: ['bash', '-c', 'mkdir -p /workspace/models /workspace/app/models/default']
+
+  # ── Step 1b: Download model weights from GCS ─────────────
+  - name: 'gcr.io/cloud-builders/gsutil'
+    id: 'fetch-model'
+    waitFor: ['mkdir-models']
+    args:
+      - '-m'
+      - 'cp'
+      - 'gs://palmcounting-models/models/best_1.onnx'
+      - 'gs://palmcounting-models/models/data.yaml'
+      - '/workspace/models/'
+
+  # ── Step 1c: Bake default model into app/models/default/ ─
+  - name: 'ubuntu'
+    id: 'copy-default-model'
+    waitFor: ['fetch-model']
+    args:
+      - 'bash'
+      - '-c'
+      - >
+        cp /workspace/models/best_1.onnx /workspace/app/models/default/best_1.onnx &&
+        cp /workspace/models/data.yaml   /workspace/app/models/default/data.yaml
+
+  # ── Step 2: Build GPU Docker image ───────────────────────
+  # Uses Dockerfile.gpu (CUDA 12.2 base + onnxruntime-gpu)
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'docker-build'
+    waitFor: ['copy-default-model']
+    args:
+      - 'build'
+      - '--file=Dockerfile.gpu'
+      - '--tag'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu:$COMMIT_SHA'
+      - '--tag'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu:latest'
+      - '--cache-from'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu:latest'
+      - '.'
+    env:
+      - 'DOCKER_BUILDKIT=1'
+
+  # ── Step 3: Push GPU image to Artifact Registry ──────────
+  - name: 'gcr.io/cloud-builders/docker'
+    id: 'docker-push'
+    waitFor: ['docker-build']
+    args:
+      - 'push'
+      - '--all-tags'
+      - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu'
+
+  # ── Step 4: Deploy GPU Cloud Run service ─────────────────
+  # Service: palm-counter-gpu (separate from palm-counter CPU service)
+  # Access: no-allow-unauthenticated (called internally by CPU service only)
+  # GPU:    NVIDIA L4 · 1 GPU · CUDA 12.2 · gen2 execution environment
+  # Spec:   4 vCPU / 16 GiB RAM (minimum required for L4 GPU on Cloud Run)
+  # Scale:  0–3 instances, concurrency=1 (GPU memory cannot be shared)
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    id: 'cloud-run-deploy-gpu'
+    waitFor: ['docker-push']
+    entrypoint: gcloud
+    args:
+      - 'run'
+      - 'deploy'
+      - 'palm-counter-gpu'
+      - '--image=asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu:$COMMIT_SHA'
+      - '--region=asia-southeast1'
+      - '--platform=managed'
+      - '--no-allow-unauthenticated'
+      - '--service-account=palm-counter-gpu@$PROJECT_ID.iam.gserviceaccount.com'
+      # ── GPU flags ────────────────────────────────────────
+      - '--execution-environment=gen2'
+      - '--gpu=1'
+      - '--gpu-type=nvidia-l4'
+      # ── Resource spec (L4 minimum: 4 vCPU / 16 GiB) ─────
+      - '--cpu=4'
+      - '--memory=16Gi'
+      # Required: GPU containers need CPU always allocated
+      - '--no-cpu-throttling'
+      # ── Scaling ──────────────────────────────────────────
+      - '--min-instances=0'
+      - '--max-instances=3'
+      - '--concurrency=1'
+      # ── Timeouts ─────────────────────────────────────────
+      # Large raster inference can take several minutes
+      - '--timeout=3600'
+      # ── Environment ──────────────────────────────────────
+      - '--update-env-vars=PYTHONUNBUFFERED=1,FIRESTORE_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=palmcounting-uploads'
+      - '--quiet'
+
+# ── Image output declaration ─────────────────────────────────
+images:
+  - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu:$COMMIT_SHA'
+  - 'asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu:latest'
+
+# ── Build options ─────────────────────────────────────────────
+options:
+  logging: CLOUD_LOGGING_ONLY
+  # Larger machine for CUDA base image (bigger layer download)
+  machineType: 'E2_HIGHCPU_8'
+
+timeout: '2400s'  # 40-minute timeout — CUDA base image is larger than python:slim
