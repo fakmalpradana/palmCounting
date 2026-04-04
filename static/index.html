@@ -526,6 +526,28 @@
       transition: background 0.2s;
     }
     .token-modal .btn-close:hover { background: var(--amber); color: #000; }
+
+    /* Token Usage Calculator */
+    .calc-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .calc-field label {
+      display: block; font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--text-muted); margin-bottom: 5px;
+    }
+    .calc-field input {
+      width: 100%; background: var(--bg-surface); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font-mono); font-size: 13px;
+      padding: 8px 10px; outline: none;
+    }
+    .calc-field input:focus { border-color: var(--amber); }
+    .calc-result {
+      background: var(--bg-surface); border: 1px solid var(--border-hi);
+      border-left: 3px solid var(--lime); padding: 14px 16px;
+      display: flex; align-items: baseline; gap: 10px; margin-bottom: 18px;
+    }
+    .calc-result-label { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--text-muted); }
+    .calc-result-value { font-family: var(--font-display); font-size: 32px; color: var(--lime); letter-spacing: 0.04em; }
+    .calc-result-unit  { font-size: 11px; color: var(--text-muted); }
+    .calc-breakdown    { font-size: 10px; color: var(--text-dim); margin-top: 6px; letter-spacing: 0.05em; }
   </style>
 </head>
 <body>
@@ -569,7 +591,10 @@
       <div class="tagline">YOLO ONNX · Geospatial Detection · GeoJSON Output</div>
 
       <div id="tier-info" class="tier-badge"></div>
-      <button class="btn-token-guide" onclick="showTokenGuide()">? Token Guide</button>
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button class="btn-token-guide" style="margin-bottom:0" onclick="showTokenGuide()">? Token Guide</button>
+        <button class="btn-token-guide" style="margin-bottom:0" onclick="showCalculator()">⊞ Cost Calculator</button>
+      </div>
 
       <!-- Raster upload -->
       <div class="dropzone" id="dropzone">
@@ -733,6 +758,39 @@
   <!-- ======================================================
        JAVASCRIPT
   ====================================================== -->
+  <!-- Token Usage Calculator Modal -->
+  <div id="calc-modal" class="token-modal-overlay" onclick="if(event.target===this)hideCalculator()">
+    <div class="token-modal">
+      <h2>COST CALCULATOR</h2>
+      <div class="calc-inputs">
+        <div class="calc-field">
+          <label>Area (Hectares)</label>
+          <input type="number" id="calc-area" min="0" step="0.1" placeholder="e.g. 50" oninput="updateCalc()" />
+        </div>
+        <div class="calc-field">
+          <label>File Size (MB)</label>
+          <input type="number" id="calc-size" min="0" step="0.1" placeholder="e.g. 25" oninput="updateCalc()" />
+        </div>
+      </div>
+      <div class="calc-result">
+        <div>
+          <div style="display:flex;align-items:baseline;gap:8px;">
+            <span class="calc-result-label">Estimated Cost</span>
+          </div>
+          <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px;">
+            <span class="calc-result-value" id="calc-output">—</span>
+            <span class="calc-result-unit">tokens</span>
+          </div>
+          <div class="calc-breakdown" id="calc-breakdown"></div>
+        </div>
+      </div>
+      <div class="formula-box">
+        Tokens = 50 &nbsp;+&nbsp; (Area_Ha &times; 10) &nbsp;+&nbsp; (Size_MB &divide; 1024 &times; 200)
+      </div>
+      <button class="btn-close" onclick="hideCalculator()">Close</button>
+    </div>
+  </div>
+
   <!-- Token Guide Modal -->
   <div id="token-guide-modal" class="token-modal-overlay" onclick="if(event.target===this)hideTokenGuide()">
     <div class="token-modal">
@@ -762,6 +820,28 @@
     }
     function hideTokenGuide() {
       document.getElementById('token-guide-modal').classList.remove('open');
+    }
+
+    // ── Token Usage Calculator ─────────────────────────────────────────────
+    function showCalculator() {
+      document.getElementById('calc-modal').classList.add('open');
+      updateCalc();
+    }
+    function hideCalculator() {
+      document.getElementById('calc-modal').classList.remove('open');
+    }
+    function updateCalc() {
+      const areaHa = parseFloat(document.getElementById('calc-area').value) || 0;
+      const sizeMb = parseFloat(document.getElementById('calc-size').value) || 0;
+      const base   = 50;
+      const areaCost = areaHa * 10;
+      const sizeCost = (sizeMb / 1024) * 200;
+      const total  = Math.round(base + areaCost + sizeCost);
+      document.getElementById('calc-output').textContent =
+        (areaHa === 0 && sizeMb === 0) ? '—' : total.toLocaleString();
+      document.getElementById('calc-breakdown').textContent =
+        (areaHa === 0 && sizeMb === 0) ? '' :
+        `Base 50  +  Area ${areaCost.toFixed(1)}  +  Size ${sizeCost.toFixed(1)}`;
     }
 
     // ── Screen management ──────────────────────────────────────────────────
