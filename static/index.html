@@ -99,7 +99,7 @@
     .brackets > span::after  { bottom:0; right:0; border-width:0 1px 1px 0; }
 
     .sys-label {
-      position: absolute; top: 28px; left: 32px;
+      position: absolute; top: 58px; left: 32px;
       font-size: 10px; letter-spacing: 0.2em; color: var(--text-dim);
       z-index: 2; text-transform: uppercase;
     }
@@ -274,6 +274,8 @@
       display: flex; flex-direction: column;
       align-items: stretch; justify-content: flex-start;
       z-index: 5;
+      /* Shift below the fixed navbar so map-topbar doesn't fight for the same space */
+      top: 46px; bottom: 0; left: 0; right: 0;
     }
     #screen-map::before, #screen-map::after { display: none; }
 
@@ -380,6 +382,14 @@
     .stats-val { font-size:10px; color:var(--text); font-weight:500; }
     .stats-val.big { font-size:22px; font-family:var(--font-display); color:var(--amber); line-height:1; }
 
+    /* Floating map action card — Download + New File, top-left below topbar */
+    .map-actions-card {
+      position: absolute; top: 66px; left: 14px; z-index: 900;
+      background: var(--bg-overlay); border: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+      display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+    }
+
     /* Footer */
     .app-footer {
       position: fixed; bottom: 0; left: 0; right: 0;
@@ -392,17 +402,35 @@
     .app-footer em { color: var(--text-muted); font-style: normal; }
 
     /* ============================================================
-       USER HEADER BAR
+       GLOBAL HEADER / NAVBAR
+       Replaces the old floating corner pill.
+       Spans full width; Logo on left, account details on right.
     ============================================================ */
     .user-header {
-      position: fixed; top: 0; right: 0;
-      display: flex; align-items: center; gap: 1rem;
-      padding: 0.5rem 1.5rem;
-      background: rgba(0,0,0,0.7); color: #ccc;
-      font-size: 0.8rem; z-index: 1000;
-      border-bottom-left-radius: 6px;
+      position: fixed; top: 0; left: 0; right: 0; height: 46px;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 0 18px; gap: 16px;
+      background: var(--bg-overlay); border-bottom: 1px solid var(--border);
+      backdrop-filter: blur(10px);
+      font-size: 12px; color: var(--text); z-index: 9500;
+      flex-shrink: 0;
     }
-    .token-rate { color: #666; font-size: 0.75rem; }
+    .user-header-left {
+      font-family: var(--font-display); font-size: 20px;
+      letter-spacing: 0.06em; color: var(--text); white-space: nowrap;
+    }
+    .user-header-left em { color: var(--amber); font-style: normal; }
+    .user-header-right {
+      display: flex; align-items: center; gap: 14px;
+      font-family: var(--font-mono); font-size: 11px; color: var(--text-muted);
+    }
+    .user-header-right a {
+      color: var(--text-muted); text-decoration: none; letter-spacing: 0.08em;
+      transition: color 0.2s;
+    }
+    .user-header-right a:hover { color: var(--amber); }
+    .user-header-right strong { color: var(--lime); }
+    .token-rate { color: var(--text-dim); font-size: 10px; }
 
     /* ============================================================
        LOGIN SCREEN
@@ -553,13 +581,16 @@
 <body>
 
   <div class="user-header" id="user-header" style="display:none">
-    <span id="user-name"></span>
-    <span class="token-info">
-      Tokens: <strong id="token-balance">0</strong>
-      <span class="token-rate">(1 Token = IDR 1.000)</span>
-    </span>
-    <a href="#" id="admin-link" style="display:none" onclick="showAdminPanel(); return false;">Admin</a>
-    <a href="#" onclick="logout(); return false;">Logout</a>
+    <div class="user-header-left">PALM <em>COUNTER</em></div>
+    <div class="user-header-right">
+      <span id="user-name"></span>
+      <span class="token-info">
+        Tokens: <strong id="token-balance">0</strong>
+        <span class="token-rate">(1 Token = IDR 1.000)</span>
+      </span>
+      <a href="#" id="admin-link" style="display:none" onclick="showAdminPanel(); return false;">Admin</a>
+      <a href="#" onclick="logout(); return false;">Logout</a>
+    </div>
   </div>
 
   <!-- ── Login Screen ─────────────────────────────────── -->
@@ -679,19 +710,20 @@
   ====================================================== -->
   <div id="screen-map" class="screen">
     <div class="map-topbar">
-      <div class="map-logo">PALM <em>COUNTER</em></div>
       <div class="map-badge-wrap">
         <div class="map-badge-label">Detections</div>
         <div class="map-badge" id="count-badge">—</div>
       </div>
       <div class="duration-chip" id="duration-chip"></div>
-      <div class="map-topbar-right">
-        <button class="btn-icon download" id="btn-download" title="Download GeoJSON">⬇ Download</button>
-        <button class="btn-icon" id="btn-new">↩ New File</button>
-      </div>
     </div>
 
     <div id="map"></div>
+
+    <!-- Floating action card — positioned top-left, clear of navbar and topbar -->
+    <div class="map-actions-card">
+      <button class="btn-icon download" id="btn-download" title="Download GeoJSON">⬇ Download</button>
+      <button class="btn-icon" id="btn-new">↩ New File</button>
+    </div>
 
     <!-- Layer controls -->
     <div class="layer-panel">
