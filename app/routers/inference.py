@@ -526,46 +526,109 @@ async def submit_gcs_inference(
     # Pre-check: ensure minimum balance to reduce result-loss on token deduction failure
     C_BASE = 50  # minimum possible token cost
     if user_data.get("token_balance", 0) < C_BASE:
-        raise HTTPException(402, "Insufficient token balance to initiate GPU inference")
+        raise HTTPException(402, "Insufficient token balance to initiate inference")
 
-    # Forward to GPU worker
-    if not settings.gpu_worker_url:
-        raise HTTPException(503, "GPU worker not configured")
+    # ── GPU worker path (when configured) ───────────────────────────────
+    if settings.gpu_worker_url:
+        async with httpx.AsyncClient(timeout=3600) as http:
+            try:
+                gpu_resp = await http.post(
+                    f"{settings.gpu_worker_url}/api/inference/internal",
+                    json={
+                        "gcs_path": body.gcs_path,
+                        "model_name": body.model_name,
+                        "tile_width": body.tile_width,
+                        "tile_height": body.tile_height,
+                        "min_distance": body.min_distance,
+                        "conf_threshold": body.conf_threshold,
+                        "nms_threshold": body.nms_threshold,
+                        "user_uid": current_user["sub"],
+                    },
+                    headers={"X-Internal-Secret": settings.cleanup_secret},
+                )
+            except Exception as e:
+                raise HTTPException(502, f"GPU worker unreachable: {e}")
 
-    async with httpx.AsyncClient(timeout=3600) as http:
+        if gpu_resp.status_code != 200:
+            raise HTTPException(gpu_resp.status_code, f"GPU worker error: {gpu_resp.text}")
+
+        result = gpu_resp.json()
+        l_sqm = result.get("area_sqm", 0.0)
+        s_gb = result.get("file_size_gb", 0.0)
+        cost = calculate_tokens(l_sqm=l_sqm, s_gb=s_gb)
         try:
-            gpu_resp = await http.post(
-                f"{settings.gpu_worker_url}/api/inference/internal",
-                json={
-                    "gcs_path": body.gcs_path,
-                    "model_name": body.model_name,
-                    "tile_width": body.tile_width,
-                    "tile_height": body.tile_height,
-                    "min_distance": body.min_distance,
-                    "conf_threshold": body.conf_threshold,
-                    "nms_threshold": body.nms_threshold,
-                    "user_uid": current_user["sub"],
-                },
-                headers={"X-Internal-Secret": settings.cleanup_secret},
-            )
-        except Exception as e:
-            raise HTTPException(502, f"GPU worker unreachable: {e}")
+            await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+        except ValueError as e:
+            raise HTTPException(402, str(e))
+        return JSONResponse({**result, "tokens_deducted": cost})
 
-    if gpu_resp.status_code != 200:
-        raise HTTPException(gpu_resp.status_code, f"GPU worker error: {gpu_resp.text}")
+    # ── CPU fallback path (no GPU worker configured) ─────────────────────
+    # Download the GCS file, run local inference, then bill based on actual stats.
+    log.info("GPU worker not configured — falling back to CPU inference for gcs_path=%s", body.gcs_path)
 
-    result = gpu_resp.json()
+    gcs_client = gcs.Client(project=settings.firestore_project_id)
+    bucket = gcs_client.bucket(settings.gcs_bucket_name)
+    blob = bucket.blob(body.gcs_path)
 
-    # Deduct tokens based on actual file stats returned by GPU worker
-    l_sqm = result.get("area_sqm", 0.0)
-    s_gb = result.get("file_size_gb", 0.0)
-    cost = calculate_tokens(l_sqm=l_sqm, s_gb=s_gb)
+    file_id = str(uuid.uuid4())
+    raster_path = UPLOAD_DIR / f"{file_id}.tif"
+    try:
+        await asyncio.to_thread(blob.download_to_filename, str(raster_path))
+    except Exception as e:
+        raise HTTPException(500, f"Failed to download file from GCS: {e}")
+
+    file_size_bytes = raster_path.stat().st_size
+    file_size_gb = file_size_bytes / (1024 ** 3)
+
+    model_path = _resolve_model_path(body.model_name)
+    if not model_path.exists():
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(404, f"Model '{body.model_name}' not found.")
+    yaml_path = _resolve_yaml_path()
+    if not yaml_path.exists():
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(500, "data.yaml not found.")
+
+    l_sqm = await asyncio.to_thread(get_raster_area_sqm, str(raster_path))
+    cost = calculate_tokens(l_sqm=l_sqm, s_gb=file_size_gb)
+    token_balance = user_data.get("token_balance", 0)
+    if cost > token_balance:
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(402, f"Insufficient tokens: have {token_balance}, need {cost}")
+
+    t0 = time.perf_counter()
+    try:
+        geojson = run_inference(
+            input_tif_path=str(raster_path),
+            model_path=str(model_path),
+            yaml_path=str(yaml_path),
+            tile_width=body.tile_width,
+            tile_height=body.tile_height,
+            min_distance=body.min_distance,
+            conf_threshold=body.conf_threshold,
+            nms_threshold=body.nms_threshold,
+        )
+    except Exception as exc:
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(500, f"Inference failed: {exc}") from exc
+
+    duration = round(time.perf_counter() - t0, 2)
+    geojson["metadata"]["duration_seconds"] = duration
+
+    result_path = RESULTS_DIR / f"{file_id}.geojson"
+    result_path.write_text(json.dumps(geojson, indent=2))
+
     try:
         await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
     except ValueError as e:
         raise HTTPException(402, str(e))
 
-    return JSONResponse({**result, "tokens_deducted": cost})
+    return JSONResponse({
+        "file_id": file_id,
+        "duration_seconds": duration,
+        "tokens_deducted": cost,
+        "geojson": geojson,
+    })
 
 
 # ---------------------------------------------------------------------------

@@ -63,4 +63,4 @@ ENV PORT=8080
 ENV PYTHONUNBUFFERED=1
 
 # Startup — shell form so $PORT expands at runtime
-CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 120
+CMD uvicorn app.main:app --host 0.0.0.0 --port $PORT --workers 1 --timeout-keep-alive 120 --log-level info
