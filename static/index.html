@@ -576,6 +576,43 @@
     .calc-result-value { font-family: var(--font-display); font-size: 32px; color: var(--lime); letter-spacing: 0.04em; }
     .calc-result-unit  { font-size: 11px; color: var(--text-muted); }
     .calc-breakdown    { font-size: 10px; color: var(--text-dim); margin-top: 6px; letter-spacing: 0.05em; }
+
+    /* ============================================================
+       TASK SELECTOR
+    ============================================================ */
+    .task-selector { display: flex; gap: 6px; margin-bottom: 14px; }
+    .task-radio    { display: none; }
+    .task-label {
+      flex: 1; padding: 8px 6px; text-align: center;
+      border: 1px solid var(--border); cursor: pointer;
+      font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--text-muted); transition: all 0.2s; line-height: 1.4;
+    }
+    .task-radio:checked + .task-label {
+      border-color: var(--amber); color: var(--amber); background: var(--amber-glow);
+    }
+    .task-label:hover { border-color: var(--border-hi); color: var(--text); }
+
+    /* ============================================================
+       LAND COVER LEGEND PANEL (map screen)
+    ============================================================ */
+    .lc-legend {
+      position: absolute; right: 14px; bottom: 44px;
+      background: var(--bg-overlay); border: 1px solid var(--border);
+      border-left: 2px solid var(--lime); backdrop-filter: blur(10px);
+      padding: 12px 14px; z-index: 900; min-width: 190px; display: none;
+    }
+    .lc-legend.visible { display: block; }
+    .lc-legend-title {
+      font-size: 9px; letter-spacing: 0.22em; color: var(--text-muted);
+      text-transform: uppercase; margin-bottom: 10px;
+    }
+    .lc-class-row {
+      display: flex; align-items: center; gap: 8px; padding: 3px 0;
+    }
+    .lc-class-swatch { width: 10px; height: 10px; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.15); }
+    .lc-class-name { font-size: 10px; color: var(--text); letter-spacing: 0.04em; flex: 1; }
+    .lc-class-area { font-size: 9px; color: var(--text-muted); white-space: nowrap; }
   </style>
 </head>
 <body>
@@ -627,6 +664,15 @@
         <button class="btn-token-guide" style="margin-bottom:0" onclick="showCalculator()">⊞ Cost Calculator</button>
       </div>
 
+      <!-- AI Task selector -->
+      <div class="field-label" style="margin-bottom:6px">AI Task</div>
+      <div class="task-selector">
+        <input type="radio" name="task" id="task-palm" class="task-radio" value="palm_counting" checked />
+        <label for="task-palm" class="task-label">🌴 Palm Tree<br/>Counting</label>
+        <input type="radio" name="task" id="task-lc" class="task-radio" value="land_cover" />
+        <label for="task-lc" class="task-label">🗺 Land Cover<br/>Analysis</label>
+      </div>
+
       <!-- Raster upload -->
       <div class="dropzone" id="dropzone">
         <input type="file" id="file-input" accept=".tif,.tiff" />
@@ -675,6 +721,32 @@
           <div class="param-item">
             <label>Tile Size (px)</label>
             <input type="number" id="tile-size" value="640" min="128" max="1024" step="32" />
+          </div>
+        </div>
+      </details>
+
+      <!-- Land Cover parameters (shown only when Land Cover task is selected) -->
+      <details class="params" id="params-lc" style="display:none">
+        <summary>Land Cover Parameters</summary>
+        <div class="param-grid">
+          <div class="param-item">
+            <label>Tile Size (px)</label>
+            <input type="number" id="lc-tile-size" value="512" min="256" max="1024" step="64" />
+          </div>
+          <div class="param-item">
+            <label>Overlap (px)</label>
+            <input type="number" id="lc-overlap" value="128" min="64" max="256" step="32" />
+          </div>
+          <div class="param-item">
+            <label>Min Noise (px)</label>
+            <input type="number" id="lc-noise" value="250" min="50" max="1000" step="50" />
+          </div>
+          <div class="param-item">
+            <label>Noise Filter</label>
+            <select id="lc-filter" class="model-select">
+              <option value="true">Enabled</option>
+              <option value="false">Disabled</option>
+            </select>
           </div>
         </div>
       </details>
@@ -754,10 +826,16 @@
     <!-- Stats -->
     <div class="stats-panel">
       <div class="stats-title">Results</div>
-      <div class="stats-row"><span class="stats-key">Count</span><span class="stats-val big" id="stats-count">—</span></div>
+      <div class="stats-row"><span class="stats-key" id="stats-count-label">Count</span><span class="stats-val big" id="stats-count">—</span></div>
       <div class="stats-row"><span class="stats-key">Time</span><span class="stats-val" id="stats-time">—</span></div>
       <div class="stats-row"><span class="stats-key">CRS</span><span class="stats-val" id="stats-crs">—</span></div>
       <div class="stats-row"><span class="stats-key">Model</span><span class="stats-val" id="stats-model">—</span></div>
+    </div>
+
+    <!-- Land Cover class legend (shown only for land cover results) -->
+    <div class="lc-legend" id="lc-legend">
+      <div class="lc-legend-title">Land Cover Classes</div>
+      <div id="lc-legend-items"></div>
     </div>
   </div>
 
@@ -842,9 +920,36 @@
   <script>
     'use strict';
 
+    // ── Land Cover palette (mirrors app/core/land_cover_inference.py LC_PALETTE) ──
+    const LC_PALETTE_JS = {
+      0: 'rgb(0,0,0)',      // background
+      1: 'rgb(0,0,127)',    // ladang merica
+      2: 'rgb(0,0,255)',    // low vegetation
+      3: 'rgb(0,127,0)',    // high vegetation
+      4: 'rgb(0,127,127)', // tanah terbuka
+      5: 'rgb(0,127,255)', // jalan
+      6: 'rgb(0,255,0)',    // bangunan
+      7: 'rgb(0,255,127)', // badan air
+    };
+
+    // ── Loading phases per task ────────────────────────────────────────────
+    const PALM_PHASES = [
+      { label:'TILING',       msg:'Tiling image into patches…' },
+      { label:'INFERENCE',    msg:'Running YOLO ONNX inference…' },
+      { label:'FILTERING',    msg:'Filtering overlapping detections…' },
+      { label:'REPROJECTING', msg:'Reprojecting to WGS84…' },
+    ];
+    const LC_PHASES = [
+      { label:'TILING',       msg:'Tiling raster into sliding-window patches…' },
+      { label:'INFERENCE',    msg:'Running SwinUnet ONNX segmentation…' },
+      { label:'FILTERING',    msg:'Applying sieve noise removal…' },
+      { label:'VECTORIZING',  msg:'Vectorising class polygons to GeoJSON…' },
+    ];
+
     // ── Auth state (in memory only — never persisted) ──────────────────────
-    let accessToken = null;
-    let currentUser = null;
+    let accessToken  = null;
+    let currentUser  = null;
+    let currentTaskType = 'palm_counting';   // tracks active task for download URL
 
     // ── Token Guide modal ──────────────────────────────────────────────────
     function showTokenGuide() {
@@ -1076,6 +1181,21 @@
       modelFileInput.value = '';
     });
 
+    // ── Task selector ─────────────────────────────────────────────────────
+    const taskPalmInput = document.getElementById('task-palm');
+    const taskLcInput   = document.getElementById('task-lc');
+    const paramsPalm    = document.querySelector('details.params');   // existing params
+    const paramsLc      = document.getElementById('params-lc');
+
+    function onTaskChange() {
+      const isLc = taskLcInput.checked;
+      paramsPalm.style.display = isLc ? 'none' : '';
+      paramsLc.style.display   = isLc ? ''     : 'none';
+      btnRun.textContent       = isLc ? 'RUN LAND COVER' : 'RUN DETECTION';
+    }
+    taskPalmInput.addEventListener('change', onTaskChange);
+    taskLcInput.addEventListener('change',   onTaskChange);
+
     // Boot: silent refresh → show login or upload
     document.addEventListener('DOMContentLoaded', () => {
       initAuth();
@@ -1109,24 +1229,29 @@
     // ----------------------------------------------------------
     // Loading animation
     // ----------------------------------------------------------
-    const PHASES = [
-      { label:'TILING',       msg:'Tiling image into patches…' },
-      { label:'INFERENCE',    msg:'Running YOLO ONNX inference…' },
-      { label:'FILTERING',    msg:'Filtering overlapping detections…' },
-      { label:'REPROJECTING', msg:'Reprojecting to WGS84…' },
-    ];
     let phaseTimer = null, countTimer = null;
 
-    function startLoadingAnimation() {
+    function startLoadingAnimation(isLc = false) {
+      const PHASES   = isLc ? LC_PHASES : PALM_PHASES;
       let p = 0, fakeCount = 0;
       const phaseEl  = document.getElementById('loading-phase');
       const statusEl = document.getElementById('scan-status');
       const countEl  = document.getElementById('count-anim');
       phaseEl.textContent  = PHASES[0].label;
       statusEl.textContent = PHASES[0].msg;
-      countEl.textContent  = '—';
-      phaseTimer = setInterval(() => { p = (p+1) % PHASES.length; phaseEl.textContent = PHASES[p].label; statusEl.textContent = PHASES[p].msg; }, 3500);
-      countTimer = setInterval(() => { fakeCount += Math.floor(Math.random() * 8); countEl.textContent = fakeCount; }, 400);
+      // Land cover: show scanning indicator instead of detection count ticker
+      countEl.textContent  = isLc ? '···' : '—';
+      phaseTimer = setInterval(() => {
+        p = (p + 1) % PHASES.length;
+        phaseEl.textContent  = PHASES[p].label;
+        statusEl.textContent = PHASES[p].msg;
+      }, 3500);
+      if (!isLc) {
+        countTimer = setInterval(() => {
+          fakeCount += Math.floor(Math.random() * 8);
+          countEl.textContent = fakeCount;
+        }, 400);
+      }
     }
     function stopLoadingAnimation(finalCount) {
       clearInterval(phaseTimer); clearInterval(countTimer);
@@ -1193,23 +1318,44 @@
       return submitRes.json();
     }
 
+    // Land cover inference — direct POST (same billing as free tier path;
+    // commercial large-file GCS path can be added later if needed).
+    async function runLandCoverInference(file, chosenModel) {
+      const formData = new FormData();
+      formData.append('file',          file);
+      formData.append('model_name',    chosenModel);
+      formData.append('tile_size',     document.getElementById('lc-tile-size').value);
+      formData.append('overlap',       document.getElementById('lc-overlap').value);
+      formData.append('min_noise_size',document.getElementById('lc-noise').value);
+      formData.append('use_filter',    document.getElementById('lc-filter').value);
+      const res = await authFetch('/api/inference/land-cover', { method: 'POST', body: formData });
+      if (!res.ok) throw new Error(await parseErrorResponse(res));
+      return res.json();
+    }
+
     btnRun.addEventListener('click', async () => {
       if (!selectedFile) return;
       const chosenModel = modelSelect.value;
       if (!chosenModel) { errorMsg.textContent = '⚠ Select a model first.'; errorMsg.style.display = 'block'; return; }
 
+      const isLc = taskLcInput.checked;
       errorMsg.style.display = 'none';
       showScreen('screen-loading');
-      startLoadingAnimation();
+      startLoadingAnimation(isLc);
 
       try {
-        const params = inferenceParams(chosenModel);
-        // Commercial users (token_balance > 0) upload via GCS signed URL to bypass
-        // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤30 MB).
-        const isCommercial = currentUser && currentUser.token_balance > 0;
-        const data = isCommercial
-          ? await runCommercialInference(selectedFile, params)
-          : await runFreeTierInference(selectedFile, params);
+        let data;
+        if (isLc) {
+          data = await runLandCoverInference(selectedFile, chosenModel);
+        } else {
+          const params = inferenceParams(chosenModel);
+          // Commercial users (token_balance > 0) upload via GCS signed URL to bypass
+          // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤30 MB).
+          const isCommercial = currentUser && currentUser.token_balance > 0;
+          data = isCommercial
+            ? await runCommercialInference(selectedFile, params)
+            : await runFreeTierInference(selectedFile, params);
+        }
 
         if (data.tokens_deducted > 0) {
           currentUser.token_balance -= data.tokens_deducted;
@@ -1217,7 +1363,8 @@
           updateTierInfo();
         }
 
-        currentFileId = data.file_id;
+        currentFileId   = data.file_id;
+        currentTaskType = data.task_type || 'palm_counting';
         stopLoadingAnimation(data.geojson.metadata.count);
         await new Promise(r => setTimeout(r, 600));
         await buildMap(data, chosenModel);
@@ -1236,7 +1383,10 @@
     // ----------------------------------------------------------
     document.getElementById('btn-download').addEventListener('click', () => {
       if (!currentFileId) return;
-      window.location.href = `/api/download/${currentFileId}`;
+      const url = currentTaskType === 'land_cover'
+        ? `/api/download/land-cover/${currentFileId}`
+        : `/api/download/${currentFileId}`;
+      window.location.href = url;
     });
 
     // ----------------------------------------------------------
@@ -1247,92 +1397,162 @@
     let rasterLayer  = null;
     let vectorLayer  = null;
 
+    // ── Land Cover legend builder ─────────────────────────────────────────
+    function buildLcLegend(classSummary) {
+      const legend = document.getElementById('lc-legend');
+      const items  = document.getElementById('lc-legend-items');
+      legend.classList.add('visible');
+
+      // Build per-class rows from class_summary, matching name → palette index
+      const nameToId = {
+        'ladang merica': 1, 'low vegetation': 2, 'high vegetation': 3,
+        'tanah terbuka': 4, 'jalan': 5, 'bangunan': 6, 'badan air': 7,
+      };
+      const rows = Object.entries(classSummary || {}).map(([name, info]) => {
+        const id    = nameToId[name] ?? 0;
+        const color = LC_PALETTE_JS[id] || '#888';
+        return `
+          <div class="lc-class-row">
+            <div class="lc-class-swatch" style="background:${color}"></div>
+            <div class="lc-class-name">${name}</div>
+            <div class="lc-class-area">${info.area_ha.toFixed(1)} ha</div>
+          </div>`;
+      });
+      items.innerHTML = rows.length ? rows.join('') : '<div style="font-size:10px;color:var(--text-muted)">No classes detected</div>';
+    }
+
+    function hideLcLegend() {
+      document.getElementById('lc-legend').classList.remove('visible');
+    }
+
+    // ── Main map builder ──────────────────────────────────────────────────
     async function buildMap(data, modelName) {
       const { file_id, duration_seconds, geojson } = data;
-      const meta = geojson.metadata;
+      const meta  = geojson.metadata;
+      const isLc  = (data.task_type === 'land_cover');
 
-      // Stats
+      // ── Stats panel ──
+      const countLabel = isLc ? 'Polygons' : 'Count';
+      document.getElementById('stats-count-label').textContent     = countLabel;
       document.getElementById('count-badge').textContent           = meta.count.toLocaleString();
       document.getElementById('stats-count').textContent           = meta.count.toLocaleString();
       document.getElementById('stats-crs').textContent             = meta.crs;
       document.getElementById('stats-model').textContent           = modelName;
       document.getElementById('stats-time').textContent            = duration_seconds + ' s';
-      document.getElementById('detection-layer-count').textContent = meta.count + ' points';
+      document.getElementById('detection-layer-count').textContent =
+        isLc ? meta.count + ' polygons' : meta.count + ' points';
+
+      // Update layer panel label for vectors
+      const vectorLayerName  = document.querySelector('#screen-map .layer-row:nth-child(2) .layer-name');
+      if (vectorLayerName) vectorLayerName.textContent = isLc ? 'Land Cover' : 'Detections';
 
       const chip = document.getElementById('duration-chip');
       chip.textContent = '⏱ ' + duration_seconds + ' s';
       chip.classList.add('visible');
 
-      // Init / reset map
+      // ── Init / reset Leaflet ──
       if (leafletMap) { leafletMap.remove(); leafletMap = null; }
       leafletMap = L.map('map', { zoomControl: true });
 
-      // ── Step 6 Fix: Create named panes with explicit z-index ──
-      // Pane order: basemap (default, z:200) < rasterPane (z:300) < vectorPane (z:400)
+      // Pane order: basemap (z:200) < rasterPane (z:300) < vectorPane (z:400)
       const rasterPane = leafletMap.createPane('rasterPane');
       rasterPane.style.zIndex = 300;
-
       const vectorPane = leafletMap.createPane('vectorPane');
       vectorPane.style.zIndex = 400;
-      // Prevent the vector pane from intercepting mouse events for the map
-      // (individual markers still get events)
       vectorPane.style.pointerEvents = 'none';
 
-      // Basemap
+      // ── Basemap ──
       basemapLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors', maxZoom: 22,
       }).addTo(leafletMap);
 
-      // Raster overlay — always in rasterPane (z:300)
+      // ── Raster overlay ──
       const rb = meta.raster_bounds;
       if (rb) {
+        // Land cover: serve the palette-coloured classified PNG;
+        // palm counting: serve the standard 2–98 percentile stretch preview.
+        const previewUrl = isLc
+          ? `/api/preview/land-cover/${file_id}`
+          : `/api/preview/${file_id}`;
         rasterLayer = L.imageOverlay(
-          `/api/preview/${file_id}`,
+          previewUrl,
           [[rb[1], rb[0]], [rb[3], rb[2]]],
-          { opacity: 0.85, pane: 'rasterPane' }
+          { opacity: isLc ? 0.75 : 0.85, pane: 'rasterPane' }
         ).addTo(leafletMap);
       }
 
-      // Vector layer — always in vectorPane (z:400), always on top
+      // ── Vector layer ──
       if (geojson.features && geojson.features.length > 0) {
-        vectorLayer = L.geoJSON(geojson, {
-          pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
-            radius: 5,
-            fillColor:   '#c8870a',
-            color:       '#4bc46a',
-            weight:       1.2,
-            opacity:      1,
-            fillOpacity:  0.85,
-            pane:        'vectorPane',
-            interactive:  true,
-          }),
-          onEachFeature: (feature, layer) => {
-            const p = feature.properties || {};
-            layer.bindPopup(`
-              <div style="line-height:1.8">
-                <strong style="color:#c8870a;letter-spacing:.06em">${p.class_name || 'Unknown'}</strong><br/>
-                Confidence: <span style="color:#4bc46a">${(p.confidence*100).toFixed(1)}%</span>
-              </div>
-            `);
-          },
-        }).addTo(leafletMap);
+        if (isLc) {
+          // ── Land Cover: categorical polygon rendering ──
+          vectorLayer = L.geoJSON(geojson, {
+            pane: 'vectorPane',
+            style: (feature) => {
+              const classId = (feature.properties && feature.properties.nmr_obj) || 0;
+              const color   = LC_PALETTE_JS[classId] || '#888';
+              return {
+                fillColor:   color,
+                fillOpacity: 0.55,
+                color:       '#000',
+                weight:       0.4,
+                opacity:      0.7,
+                pane:        'vectorPane',
+              };
+            },
+            onEachFeature: (feature, layer) => {
+              const p = feature.properties || {};
+              layer.bindPopup(`
+                <div style="line-height:1.8">
+                  <strong style="color:#c8870a;letter-spacing:.06em">${p.nam_kls || 'Unknown'}</strong><br/>
+                  Class ID: <span style="color:#4bc46a">${p.nmr_obj ?? '—'}</span><br/>
+                  Area: <span style="color:#4bc46a">${p.luas_ha != null ? parseFloat(p.luas_ha).toFixed(2) + ' ha' : '—'}</span>
+                </div>
+              `);
+            },
+          }).addTo(leafletMap);
+          buildLcLegend(meta.class_summary || {});
+        } else {
+          // ── Palm Counting: point circle markers ──
+          hideLcLegend();
+          vectorLayer = L.geoJSON(geojson, {
+            pointToLayer: (feature, latlng) => L.circleMarker(latlng, {
+              radius: 5,
+              fillColor:   '#c8870a',
+              color:       '#4bc46a',
+              weight:       1.2,
+              opacity:      1,
+              fillOpacity:  0.85,
+              pane:        'vectorPane',
+              interactive:  true,
+            }),
+            onEachFeature: (feature, layer) => {
+              const p = feature.properties || {};
+              layer.bindPopup(`
+                <div style="line-height:1.8">
+                  <strong style="color:#c8870a;letter-spacing:.06em">${p.class_name || 'Unknown'}</strong><br/>
+                  Confidence: <span style="color:#4bc46a">${(p.confidence * 100).toFixed(1)}%</span>
+                </div>
+              `);
+            },
+          }).addTo(leafletMap);
+        }
         leafletMap.fitBounds(vectorLayer.getBounds(), { padding: [40, 40] });
       } else if (rasterLayer) {
+        if (!isLc) hideLcLegend();
         leafletMap.fitBounds(rasterLayer.getBounds(), { padding: [40, 40] });
       } else {
         leafletMap.setView([0, 0], 4);
       }
 
-      // Re-bind toggles (fresh listeners each map build)
+      // ── Re-bind layer toggles (fresh listeners each map build) ──
       ['toggle-raster', 'toggle-vectors', 'toggle-basemap'].forEach(id => {
-        const el = document.getElementById(id);
+        const el    = document.getElementById(id);
         const clone = el.cloneNode(true);
         el.parentNode.replaceChild(clone, el);
       });
 
       document.getElementById('toggle-raster').addEventListener('change', e => {
         if (!rasterLayer) return;
-        // Re-add to the correct pane so z-order is preserved
         if (e.target.checked) {
           rasterLayer.options.pane = 'rasterPane';
           rasterLayer.addTo(leafletMap);
@@ -1358,12 +1578,18 @@
     // New file
     // ----------------------------------------------------------
     document.getElementById('btn-new').addEventListener('click', () => {
-      selectedFile = null; currentFileId = null;
-      fileInput.value       = '';
+      selectedFile    = null;
+      currentFileId   = null;
+      currentTaskType = 'palm_counting';
+      fileInput.value            = '';
       dropFilename.style.display = 'none';
-      btnRun.disabled       = true;
-      errorMsg.style.display = 'none';
+      btnRun.disabled            = true;
+      errorMsg.style.display     = 'none';
       document.getElementById('duration-chip').classList.remove('visible');
+      hideLcLegend();
+      // Reset task selector to palm counting
+      taskPalmInput.checked = true;
+      onTaskChange();
       ['toggle-raster','toggle-vectors','toggle-basemap'].forEach(id => {
         document.getElementById(id).checked = true;
       });
