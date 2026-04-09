@@ -35,6 +35,7 @@ from pydantic import BaseModel
 from app.core import firestore_client
 from app.core.config import settings
 from app.core.inference import run_inference
+from app.core.land_cover_inference import LC_PALETTE, run_land_cover_inference
 
 log = logging.getLogger(__name__)
 
@@ -348,6 +349,196 @@ async def infer(
         "tokens_deducted": tokens_deducted,
         "geojson": geojson,
     })
+
+
+# ---------------------------------------------------------------------------
+# Land Cover inference
+# ---------------------------------------------------------------------------
+
+@router.post("/inference/land-cover")
+async def infer_land_cover(
+    file: UploadFile = File(...),
+    model_name: str = Form("unet_swin.onnx"),
+    in_channels: int = Form(3),
+    tile_size: int = Form(512),
+    overlap: int = Form(128),
+    use_filter: bool = Form(True),
+    min_noise_size: int = Form(250),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Land cover classification: GeoTIFF in → polygon GeoJSON + classified raster out.
+
+    Returns the same billing envelope as /api/inference, with an additional
+    ``task_type: "land_cover"`` field and a ``class_summary`` in the metadata.
+    The classified GeoTIFF is stored server-side so /api/preview/land-cover/<id>
+    can render it with the class colour palette.
+    """
+    if not file.filename.lower().endswith((".tif", ".tiff")):
+        raise HTTPException(400, "Only GeoTIFF files (.tif / .tiff) are accepted.")
+
+    file_bytes      = await file.read()
+    file_size_bytes = len(file_bytes)
+    file_size_gb    = file_size_bytes / (1024 ** 3)
+
+    # ── Fetch user for tier decision ─────────────────────────────────────
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance = user_data.get("token_balance", 0)
+
+    # ── Free tier pre-checks ─────────────────────────────────────────────
+    if token_balance == 0:
+        if file_size_bytes > FREE_TIER_MAX_BYTES:
+            raise HTTPException(
+                403,
+                f"Quota exceeded: free tier limit is 30 MB. "
+                f"Your file is {file_size_bytes / 1024 / 1024:.1f} MB. "
+                f"Add tokens to process larger files.",
+            )
+        today     = __import__("datetime").date.today().isoformat()
+        last_date = user_data.get("last_upload_date", "")
+        count     = user_data.get("daily_upload_count", 0) if last_date == today else 0
+        if count >= FREE_TIER_MAX_DAILY:
+            raise HTTPException(
+                403,
+                "Quota exceeded: free tier allows 3 uploads/day. Add tokens for unlimited access.",
+            )
+
+    # ── Model check ──────────────────────────────────────────────────────
+    model_path = _resolve_model_path(model_name)
+    if not model_path.exists():
+        raise HTTPException(404, f"Model '{model_name}' not found. Upload it first.")
+
+    # ── Save upload ──────────────────────────────────────────────────────
+    file_id      = str(uuid.uuid4())
+    raster_path  = UPLOAD_DIR / f"{file_id}.tif"
+    raster_path.write_bytes(file_bytes)
+
+    # ── Billing ──────────────────────────────────────────────────────────
+    tokens_deducted = 0
+    if token_balance > 0:
+        l_sqm = await asyncio.to_thread(get_raster_area_sqm, str(raster_path))
+        cost  = calculate_tokens(l_sqm=l_sqm, s_gb=file_size_gb)
+        if cost > token_balance:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(402, f"Insufficient tokens: have {token_balance}, need {cost}")
+        try:
+            await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+            tokens_deducted = cost
+        except ValueError as e:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(402, str(e))
+    else:
+        try:
+            await asyncio_to_thread_check_daily(current_user["sub"])
+        except ValueError:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(429, "Free tier daily limit reached.")
+
+    # ── Inference ────────────────────────────────────────────────────────
+    result_tif     = RESULTS_DIR / f"{file_id}_lc.tif"
+    result_geojson = RESULTS_DIR / f"{file_id}_lc.geojson"
+
+    t0 = time.perf_counter()
+    try:
+        geojson = await asyncio.to_thread(
+            run_land_cover_inference,
+            str(raster_path),
+            str(model_path),
+            in_channels=in_channels,
+            tile_size=tile_size,
+            overlap=overlap,
+            use_filter=use_filter,
+            min_noise_size=min_noise_size,
+            result_tif_path=str(result_tif),
+        )
+    except Exception as exc:
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(500, f"Land cover inference failed: {exc}") from exc
+
+    duration = round(time.perf_counter() - t0, 2)
+    geojson["metadata"]["duration_seconds"] = duration
+
+    result_geojson.write_text(json.dumps(geojson, indent=2))
+
+    return JSONResponse({
+        "file_id":          file_id,
+        "task_type":        "land_cover",
+        "duration_seconds": duration,
+        "tokens_deducted":  tokens_deducted,
+        "geojson":          geojson,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Land Cover preview (palette-coloured PNG)
+# ---------------------------------------------------------------------------
+
+@router.get("/preview/land-cover/{file_id}")
+def get_land_cover_preview(file_id: str):
+    """
+    Return a palette-coloured PNG of the classified raster stored at
+    results/{file_id}_lc.tif, with WGS84 bounds in response headers.
+    """
+    _validate_file_id(file_id)
+    path = RESULTS_DIR / f"{file_id}_lc.tif"
+    if not path.exists():
+        raise HTTPException(404, "Land cover result not found. Run inference first.")
+
+    with rasterio.open(path) as src:
+        bounds_wgs84 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+        data         = src.read(1)   # single-band class indices (uint8)
+
+    # Map class indices to RGB using the palette
+    h, w = data.shape
+    rgb  = np.zeros((h, w, 3), dtype=np.uint8)
+    for cls_id, color in LC_PALETTE.items():
+        rgb[data == cls_id] = color
+
+    img = Image.fromarray(rgb)
+    if max(img.size) > 2048:
+        ratio = 2048 / max(img.size)
+        img = img.resize(
+            (int(img.size[0] * ratio), int(img.size[1] * ratio)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+
+    bw, bs, be, bn = bounds_wgs84
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/png",
+        headers={
+            "X-Raster-West":  str(bw), "X-Raster-South": str(bs),
+            "X-Raster-East":  str(be), "X-Raster-North": str(bn),
+            "Access-Control-Expose-Headers":
+                "X-Raster-West,X-Raster-South,X-Raster-East,X-Raster-North",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Land Cover GeoJSON download
+# ---------------------------------------------------------------------------
+
+@router.get("/download/land-cover/{file_id}")
+def download_land_cover_result(file_id: str):
+    """Download the land-cover polygon GeoJSON for a completed inference run."""
+    _validate_file_id(file_id)
+    path = RESULTS_DIR / f"{file_id}_lc.geojson"
+    if not path.exists():
+        raise HTTPException(404, "Land cover result not found. Run inference first.")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/geo+json",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="land_cover_{file_id[:8]}.geojson"'
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
