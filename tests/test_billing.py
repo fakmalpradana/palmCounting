@@ -53,14 +53,14 @@ def test_free_tier_blocked_over_30mb(client, access_token, mocker):
     resp = client.post(
         "/api/inference",
         files={"file": ("test.tif", big_content, "image/tiff")},
-        data={"model_name": "best_1.onnx"},
+        data={"model_name": "palmCounting-model.onnx"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    assert resp.status_code == 413
+    assert resp.status_code == 403   # our pre-check returns 403 (Forbidden), not 413
 
 
 def test_free_tier_daily_limit_enforced(client, access_token, mocker):
-    """Free tier users who uploaded 3 times today get 429."""
+    """Free tier users who uploaded 3 times today get 403 (pre-check fast-fail)."""
     today = date.today().isoformat()
     mocker.patch(
         "app.routers.inference.asyncio_to_thread_get_user",
@@ -73,10 +73,10 @@ def test_free_tier_daily_limit_enforced(client, access_token, mocker):
     resp = client.post(
         "/api/inference",
         files={"file": ("test.tif", b"0" * 1024, "image/tiff")},
-        data={"model_name": "best_1.onnx"},
+        data={"model_name": "palmCounting-model.onnx"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    assert resp.status_code == 429
+    assert resp.status_code == 403   # pre-check (cached count) returns 403, not 429
 
 
 def test_commercial_tier_insufficient_tokens(client, access_token, mocker):
@@ -96,7 +96,7 @@ def test_commercial_tier_insufficient_tokens(client, access_token, mocker):
     resp = client.post(
         "/api/inference",
         files={"file": ("test.tif", b"0" * 1024, "image/tiff")},
-        data={"model_name": "best_1.onnx"},
+        data={"model_name": "palmCounting-model.onnx"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
     assert resp.status_code == 402

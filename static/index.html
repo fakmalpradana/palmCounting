@@ -1148,8 +1148,8 @@
           modelSelect.innerHTML = '<option value="">No models found</option>';
           return;
         }
-        // Auto-select: prefer explicit selectValue, then best_1.onnx, then first
-        const defaultSel = selectValue || (data.models.includes('best_1.onnx') ? 'best_1.onnx' : data.models[0]);
+        // Auto-select: prefer explicit selectValue, then palmCounting-model.onnx, then first
+        const defaultSel = selectValue || (data.models.includes('palmCounting-model.onnx') ? 'palmCounting-model.onnx' : data.models[0]);
         modelSelect.innerHTML = data.models
           .map(m => `<option value="${m}"${m === defaultSel ? ' selected' : ''}>${m}</option>`)
           .join('');

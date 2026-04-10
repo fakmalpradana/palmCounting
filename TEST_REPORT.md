@@ -46,6 +46,7 @@ The app loaded immediately. The user was **already authenticated** via an active
 **Observed UI:**
 - Model dropdown shows `best_1.onnx` (selected)
 - Status line below dropdown shows `✓ best_1.onnx uploaded`
+- before it, model dropdown shows `Loading models...`
 
 This confirms **Step 1 fix (default model bundling)** is working — the model is visible in the list.
 **Result:** ✅ **PASS**

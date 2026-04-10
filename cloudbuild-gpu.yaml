@@ -32,7 +32,7 @@ steps:
     args:
       - '-m'
       - 'cp'
-      - 'gs://palmcounting-models/models/best_1.onnx'
+      - 'gs://palmcounting-models/models/palmCounting-model.onnx'
       - 'gs://palmcounting-models/models/data.yaml'
       - '/workspace/models/'
 
@@ -44,7 +44,7 @@ steps:
       - 'bash'
       - '-c'
       - >
-        cp /workspace/models/best_1.onnx /workspace/app/models/default/best_1.onnx &&
+        cp /workspace/models/palmCounting-model.onnx /workspace/app/models/default/palmCounting-model.onnx &&
         cp /workspace/models/data.yaml   /workspace/app/models/default/data.yaml
 
   # ── Step 2: Build GPU Docker image ───────────────────────

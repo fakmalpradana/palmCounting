@@ -47,7 +47,7 @@ palmCounting/
 │   └── routers/
 │       └── inference.py        # API route handlers
 ├── models/
-│   ├── best_1.onnx             # Default YOLO ONNX model
+│   ├── palmCounting-model.onnx # Default YOLO ONNX model
 │   └── data.yaml               # Class labels
 ├── static/
 │   └── index.html              # Single-page WebGIS frontend
@@ -185,7 +185,7 @@ Run palm detection on an uploaded GeoTIFF.
 | Field | Type | Default | Description |
 |---|---|---|---|
 | `file` | file | — | GeoTIFF raster (`.tif` / `.tiff`) |
-| `model_name` | string | `best_1.onnx` | Model filename in `models/` |
+| `model_name` | string | `palmCounting-model.onnx` | Model filename in `models/` |
 | `tile_width` | int | `640` | Tile width in pixels |
 | `tile_height` | int | `640` | Tile height in pixels |
 | `min_distance` | float | `1.0` | Minimum inter-detection distance (CRS units) |
@@ -242,7 +242,7 @@ Bounds are returned in response headers: `X-Raster-West/South/East/North`.
 List all available ONNX models.
 
 ```json
-{ "models": ["best_1.onnx", "custom_v2.onnx"] }
+{ "models": ["palmCounting-model.onnx", "custom_v2.onnx"] }
 ```
 
 ---

@@ -27,3 +27,4 @@ tiles_temp_*/
 node_modules/
 .DS_Store
 .worktrees/
+.env.local

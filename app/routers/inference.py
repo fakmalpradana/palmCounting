@@ -241,7 +241,7 @@ def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
 @router.post("/inference")
 async def infer(
     file: UploadFile = File(...),
-    model_name: str = Form("best_1.onnx"),
+    model_name: str = Form("palmCounting-model.onnx"),
     tile_width: int = Form(640),
     tile_height: int = Form(640),
     min_distance: float = Form(1.0),
@@ -651,7 +651,7 @@ class PresignRequest(BaseModel):
 
 class SubmitRequest(BaseModel):
     gcs_path: str
-    model_name: str = "best_1.onnx"
+    model_name: str = "palmCounting-model.onnx"
     tile_width: int = 640
     tile_height: int = 640
     min_distance: float = 1.0
