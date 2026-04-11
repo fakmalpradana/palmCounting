@@ -555,6 +555,166 @@
     }
     .token-modal .btn-close:hover { background: var(--amber); color: #000; }
 
+    /* ============================================================
+       PRE-FLIGHT CONFIRMATION MODAL
+    ============================================================ */
+    .preflight-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0, 0, 0, 0.84);
+      backdrop-filter: blur(3px);
+      z-index: 9999;
+      align-items: center; justify-content: center;
+    }
+    .preflight-overlay.open { display: flex; }
+
+    .preflight-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-hi);
+      border-top: 3px solid var(--amber);
+      width: min(500px, 94vw);
+      position: relative; overflow: hidden;
+      animation: pf-rise 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
+    }
+    @keyframes pf-rise {
+      from { opacity: 0; transform: translateY(22px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+    /* Scanline texture */
+    .preflight-card::before {
+      content: ''; position: absolute; inset: 0; pointer-events: none; z-index: 0;
+      background: repeating-linear-gradient(
+        0deg, transparent, transparent 3px,
+        rgba(75, 196, 106, 0.018) 3px, rgba(75, 196, 106, 0.018) 4px
+      );
+    }
+    .pf-inner { position: relative; z-index: 1; }
+
+    /* Header */
+    .pf-header {
+      padding: 20px 26px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; justify-content: space-between;
+    }
+    .pf-tag {
+      display: inline-block; font-family: var(--font-mono);
+      font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+      background: var(--amber-glow); border: 1px solid var(--amber);
+      color: var(--amber); padding: 3px 9px; margin-bottom: 9px;
+    }
+    .pf-tag--free {
+      background: var(--lime-dim); border-color: var(--lime); color: var(--lime);
+    }
+    .pf-title {
+      font-family: var(--font-display); font-size: 24px;
+      letter-spacing: 0.05em; color: var(--text); line-height: 1;
+    }
+    .pf-task-label {
+      font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+      color: var(--text-muted); margin-top: 5px; font-family: var(--font-mono);
+    }
+    .pf-corner {
+      text-align: right; font-family: var(--font-mono);
+      font-size: 9px; color: var(--text-dim); line-height: 1.8;
+    }
+
+    /* Breakdown rows */
+    .pf-breakdown { padding: 14px 26px 4px; }
+    .pf-row {
+      display: grid; grid-template-columns: 1fr auto auto;
+      align-items: baseline; gap: 8px;
+      padding: 8px 0; border-bottom: 1px dashed var(--border);
+    }
+    .pf-row:last-child { border-bottom: none; }
+    .pf-row-label {
+      font-size: 10px; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--text-muted);
+    }
+    .pf-row-detail { font-size: 10px; color: var(--text-dim); text-align: right; }
+    .pf-row-value  {
+      font-family: var(--font-mono); font-size: 12px;
+      color: var(--text); text-align: right; min-width: 88px;
+    }
+
+    /* Separator */
+    .pf-sep { height: 1px; background: var(--border-hi); margin: 10px 26px; }
+
+    /* Total */
+    .pf-total {
+      padding: 8px 26px 14px;
+      display: flex; align-items: baseline; justify-content: space-between;
+    }
+    .pf-total-label {
+      font-family: var(--font-display); font-size: 15px;
+      letter-spacing: 0.1em; color: var(--text-muted);
+    }
+    .pf-total-value {
+      font-family: var(--font-display); font-size: 36px;
+      letter-spacing: 0.03em; color: var(--amber);
+      text-shadow: 0 0 22px rgba(200, 135, 10, 0.5); line-height: 1;
+    }
+
+    /* Balance section */
+    .pf-balance-section {
+      background: var(--bg-surface);
+      border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+      padding: 10px 26px;
+    }
+    .pf-bal-row {
+      display: flex; justify-content: space-between; align-items: baseline;
+      padding: 5px 0;
+    }
+    .pf-bal-label {
+      font-size: 10px; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--text-muted);
+    }
+    .pf-bal-value { font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+    .pf-bal-value.ok  { color: var(--lime); }
+    .pf-bal-value.bad { color: var(--danger); }
+
+    /* Warning / info boxes */
+    .pf-warning, .pf-free-info {
+      margin: 14px 26px 0;
+      padding: 10px 14px; font-size: 11px; letter-spacing: 0.03em;
+      line-height: 1.55; border-left-width: 3px; border-left-style: solid;
+      display: none;
+    }
+    .pf-warning.visible  { display: block; }
+    .pf-free-info.visible { display: block; }
+    .pf-warning {
+      background: rgba(200, 74, 46, 0.09);
+      border: 1px solid var(--danger); border-left-color: var(--danger);
+      color: var(--danger);
+    }
+    .pf-free-info {
+      background: var(--lime-dim);
+      border: 1px solid rgba(75, 196, 106, 0.3); border-left-color: var(--lime);
+      color: var(--lime);
+    }
+
+    /* Action buttons */
+    .pf-actions {
+      padding: 16px 26px;
+      display: flex; gap: 10px; justify-content: flex-end;
+    }
+    .pf-btn {
+      font-family: var(--font-mono); font-size: 11px;
+      letter-spacing: 0.12em; text-transform: uppercase;
+      border: none; padding: 10px 24px; cursor: pointer;
+      transition: background 0.18s, box-shadow 0.18s; border-radius: var(--radius);
+    }
+    .pf-btn-cancel {
+      background: transparent; border: 1px solid var(--border-hi);
+      color: var(--text-muted);
+    }
+    .pf-btn-cancel:hover { background: var(--border); color: var(--text); }
+    .pf-btn-confirm { background: var(--lime); color: #000; font-weight: 700; }
+    .pf-btn-confirm:hover:not(:disabled) {
+      background: #5ee07a; box-shadow: 0 0 16px rgba(75, 196, 106, 0.45);
+    }
+    .pf-btn-confirm:disabled {
+      background: var(--border-hi); color: var(--text-dim); cursor: not-allowed;
+    }
+
     /* Token Usage Calculator */
     .calc-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
     .calc-field label {
@@ -914,6 +1074,79 @@
         Cost (tokens) = 50 &nbsp;+&nbsp; (Area in Ha &times; 10) &nbsp;+&nbsp; (Size in GB &times; 200)
       </div>
       <button class="btn-close" onclick="hideTokenGuide()">Close</button>
+    </div>
+  </div>
+
+  <!-- Pre-Processing Confirmation Modal -->
+  <div id="preflight-modal" class="preflight-overlay">
+    <div class="preflight-card">
+      <div class="pf-inner">
+
+        <!-- Header -->
+        <div class="pf-header">
+          <div>
+            <div id="pf-tag" class="pf-tag">PREFLIGHT CLEARANCE</div>
+            <div class="pf-title">Cost Estimate</div>
+            <div class="pf-task-label" id="pf-task-label">Palm Tree Counting</div>
+          </div>
+          <div class="pf-corner" id="pf-corner">
+            PRE-PROCESSING<br>CONFIRMATION
+          </div>
+        </div>
+
+        <!-- Cost breakdown (commercial tier) -->
+        <div id="pf-breakdown-section">
+          <div class="pf-breakdown">
+            <div class="pf-row">
+              <span class="pf-row-label">Base Cost</span>
+              <span class="pf-row-detail"></span>
+              <span class="pf-row-value" id="pf-base-value">50 Tokens</span>
+            </div>
+            <div class="pf-row">
+              <span class="pf-row-label">Total Area</span>
+              <span class="pf-row-detail" id="pf-area-detail">—</span>
+              <span class="pf-row-value" id="pf-area-value">—</span>
+            </div>
+            <div class="pf-row">
+              <span class="pf-row-label">File Size</span>
+              <span class="pf-row-detail" id="pf-size-detail">—</span>
+              <span class="pf-row-value" id="pf-size-value">—</span>
+            </div>
+          </div>
+
+          <div class="pf-sep"></div>
+
+          <div class="pf-total">
+            <span class="pf-total-label">TOTAL REQUIRED</span>
+            <span class="pf-total-value" id="pf-total-value">—</span>
+          </div>
+        </div>
+
+        <!-- Balance (commercial tier) -->
+        <div id="pf-balance-section" class="pf-balance-section">
+          <div class="pf-bal-row">
+            <span class="pf-bal-label">Your Balance</span>
+            <span class="pf-bal-value" id="pf-balance-current">—</span>
+          </div>
+          <div class="pf-bal-row">
+            <span class="pf-bal-label">Balance After Processing</span>
+            <span class="pf-bal-value" id="pf-balance-after">—</span>
+          </div>
+        </div>
+
+        <!-- Free trial info box -->
+        <div id="pf-free-info" class="pf-free-info"></div>
+
+        <!-- Warning (insufficient balance or trial exhausted) -->
+        <div id="pf-warning" class="pf-warning"></div>
+
+        <!-- Actions -->
+        <div class="pf-actions">
+          <button class="pf-btn pf-btn-cancel" id="pf-cancel-btn">Cancel</button>
+          <button class="pf-btn pf-btn-confirm" id="pf-confirm-btn">Confirm &amp; Run</button>
+        </div>
+
+      </div>
     </div>
   </div>
 
@@ -1331,13 +1564,128 @@
       return res.json();
     }
 
-    btnRun.addEventListener('click', async () => {
-      if (!selectedFile) return;
+    // ----------------------------------------------------------
+    // Pre-flight modal logic
+    // ----------------------------------------------------------
+    let _pendingInference = null; // set by showPreflightModal, executed on confirm
 
-      const isLc = taskLcInput.checked;
-      // Model names are fixed per task on the backend; derive display name here.
+    const preflightModal  = document.getElementById('preflight-modal');
+    const pfCancelBtn     = document.getElementById('pf-cancel-btn');
+    const pfConfirmBtn    = document.getElementById('pf-confirm-btn');
+
+    function closePreflight() {
+      preflightModal.classList.remove('open');
+    }
+
+    pfCancelBtn.addEventListener('click', closePreflight);
+    preflightModal.addEventListener('click', e => { if (e.target === preflightModal) closePreflight(); });
+
+    pfConfirmBtn.addEventListener('click', async () => {
+      closePreflight();
+      if (_pendingInference) {
+        const fn = _pendingInference;
+        _pendingInference = null;
+        await fn();
+      }
+    });
+
+    function populatePreflightModal(data, isLc) {
+      const taskLabel   = isLc ? 'Land Cover Analysis' : 'Palm Tree Counting';
+      const breakSec    = document.getElementById('pf-breakdown-section');
+      const balanceSec  = document.getElementById('pf-balance-section');
+      const freeInfo    = document.getElementById('pf-free-info');
+      const warning     = document.getElementById('pf-warning');
+
+      document.getElementById('pf-task-label').textContent = taskLabel;
+      freeInfo.classList.remove('visible');
+      warning.classList.remove('visible');
+      pfConfirmBtn.disabled = false;
+
+      if (data.tier === 'free') {
+        document.getElementById('pf-tag').textContent = 'FREE TRIAL';
+        document.getElementById('pf-tag').className   = 'pf-tag pf-tag--free';
+        breakSec.style.display   = 'none';
+        balanceSec.style.display = 'none';
+
+        if (data.trial_used) {
+          warning.textContent = `Your one-time free ${taskLabel} trial has already been used. Contact the admin to add tokens.`;
+          warning.classList.add('visible');
+          pfConfirmBtn.disabled = true;
+        } else if (data.over_size_limit) {
+          warning.textContent = `File size ${data.file_size_mb} MB exceeds the free tier limit of ${data.free_tier_max_mb} MB. Add tokens to process larger files.`;
+          warning.classList.add('visible');
+          pfConfirmBtn.disabled = true;
+        } else {
+          const areaStr = data.area_ha.toLocaleString(undefined, { maximumFractionDigits: 1 });
+          freeInfo.textContent = `This will consume your one-time free ${taskLabel} trial.\nFile: ${data.file_size_mb} MB  ·  Area: ${areaStr} Ha`;
+          freeInfo.style.whiteSpace = 'pre-line';
+          freeInfo.classList.add('visible');
+        }
+
+      } else {
+        // Commercial tier
+        document.getElementById('pf-tag').textContent = 'PREFLIGHT CLEARANCE';
+        document.getElementById('pf-tag').className   = 'pf-tag';
+        breakSec.style.display   = '';
+        balanceSec.style.display = '';
+
+        const sizeMb = data.file_size_mb;
+        const sizeDisplay = sizeMb >= 1024
+          ? `${(sizeMb / 1024).toFixed(2)} GB`
+          : `${sizeMb.toFixed(1)} MB`;
+        const areaDisplay = `${data.area_ha.toLocaleString(undefined, { maximumFractionDigits: 1 })} Ha`;
+
+        document.getElementById('pf-base-value').textContent    = `${data.base_cost.toLocaleString()} Tokens`;
+        document.getElementById('pf-area-detail').textContent   = areaDisplay;
+        document.getElementById('pf-area-value').textContent    = `${data.area_cost.toLocaleString()} Tokens`;
+        document.getElementById('pf-size-detail').textContent   = sizeDisplay;
+        document.getElementById('pf-size-value').textContent    = `${data.size_cost.toLocaleString()} Tokens`;
+        document.getElementById('pf-total-value').textContent   = `${data.total_cost.toLocaleString()} Tokens`;
+        document.getElementById('pf-balance-current').textContent = `${data.token_balance.toLocaleString()} Tokens`;
+
+        const afterEl = document.getElementById('pf-balance-after');
+        afterEl.textContent = `${data.balance_after.toLocaleString()} Tokens`;
+        afterEl.className   = 'pf-bal-value ' + (data.balance_after >= 0 ? 'ok' : 'bad');
+
+        if (!data.can_afford) {
+          warning.textContent = 'Insufficient token balance. Please contact the admin to top up your account.';
+          warning.classList.add('visible');
+          pfConfirmBtn.disabled = true;
+        }
+      }
+    }
+
+    async function showPreflightModal(file, isLc) {
+      const origLabel = btnRun.textContent;
+      btnRun.disabled    = true;
+      btnRun.textContent = 'CALCULATING…';
+      errorMsg.style.display = 'none';
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+        formData.append('task', isLc ? 'land_cover' : 'palm');
+
+        const res = await authFetch('/api/inference/preflight', { method: 'POST', body: formData });
+        if (!res.ok) throw new Error(await parseErrorResponse(res));
+        const data = await res.json();
+
+        populatePreflightModal(data, isLc);
+        _pendingInference = () => runInferenceFlow(file, isLc);
+        preflightModal.classList.add('open');
+
+      } catch (err) {
+        errorMsg.textContent   = '⚠ ' + err.message;
+        errorMsg.style.display = 'block';
+      } finally {
+        btnRun.disabled    = false;
+        btnRun.textContent = origLabel;
+      }
+    }
+
+    // Core inference flow — called after the user confirms in the modal
+    async function runInferenceFlow(file, isLc) {
       const displayModel = isLc ? 'unet_swin.onnx' : 'palmCounting-model.onnx';
-
       errorMsg.style.display = 'none';
       showScreen('screen-loading');
       startLoadingAnimation(isLc);
@@ -1345,15 +1693,15 @@
       try {
         let data;
         if (isLc) {
-          data = await runLandCoverInference(selectedFile);
+          data = await runLandCoverInference(file);
         } else {
           const params = inferenceParams();
           // Commercial users (token_balance > 0) upload via GCS signed URL to bypass
           // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤50 MB cap).
           const isCommercial = currentUser && currentUser.token_balance > 0;
           data = isCommercial
-            ? await runCommercialInference(selectedFile, params)
-            : await runFreeTierInference(selectedFile, params);
+            ? await runCommercialInference(file, params)
+            : await runFreeTierInference(file, params);
         }
 
         if (data.tokens_deducted > 0) {
@@ -1375,6 +1723,11 @@
         errorMsg.textContent   = '⚠ ' + err.message;
         errorMsg.style.display = 'block';
       }
+    }
+
+    btnRun.addEventListener('click', async () => {
+      if (!selectedFile) return;
+      await showPreflightModal(selectedFile, taskLcInput.checked);
     });
 
     // ----------------------------------------------------------

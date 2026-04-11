@@ -238,6 +238,89 @@ def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight cost estimate (no inference, no token deduction)
+# ---------------------------------------------------------------------------
+
+@router.post("/inference/preflight")
+async def preflight_check(
+    file: UploadFile = File(...),
+    task: str = Form("palm"),  # "palm" | "land_cover"
+    current_user: dict = Depends(get_current_user),
+):
+    """Read raster metadata and return a token cost estimate.
+
+    Accepts the GeoTIFF, reads its header with rasterio, computes the cost
+    breakdown, then discards the file.  No inference is run and no tokens are
+    deducted.  The frontend shows this breakdown in the confirmation modal
+    before the user commits to a full inference run.
+    """
+    if not file.filename.lower().endswith((".tif", ".tiff")):
+        raise HTTPException(400, "Only GeoTIFF files are accepted.")
+
+    file_bytes = await file.read()
+    file_size_bytes = len(file_bytes)
+    file_size_gb = file_size_bytes / (1024 ** 3)
+
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance = user_data.get("token_balance", 0)
+
+    # Write to a temp path just long enough to read raster metadata.
+    import tempfile
+    tmp_id = uuid.uuid4().hex
+    tmp_path = UPLOAD_DIR / f"_preflight_{tmp_id}.tif"
+    try:
+        tmp_path.write_bytes(file_bytes)
+        area_sqm = await asyncio.to_thread(get_raster_area_sqm, str(tmp_path))
+    except Exception as exc:
+        raise HTTPException(422, f"Could not read raster metadata: {exc}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    area_ha = area_sqm / 10_000
+    area_cost = math.ceil((area_sqm / 10_000) * W_AREA)
+    size_cost = math.ceil(file_size_gb * W_SIZE)
+    total_cost = math.ceil(C_BASE + area_cost + size_cost)
+
+    # Free-tier users: no token math needed; surface trial status instead.
+    if token_balance == 0:
+        trial_field = "free_palm_used" if task == "palm" else "free_landcover_used"
+        trial_used = user_data.get(trial_field, False)
+        over_size = file_size_bytes > FREE_TIER_MAX_BYTES
+        return JSONResponse({
+            "tier": "free",
+            "task": task,
+            "file_size_bytes": file_size_bytes,
+            "file_size_mb": round(file_size_bytes / (1024 * 1024), 2),
+            "area_ha": round(area_ha, 2),
+            "trial_used": trial_used,
+            "over_size_limit": over_size,
+            "free_tier_max_mb": FREE_TIER_MAX_BYTES // (1024 * 1024),
+        })
+
+    # Commercial tier: full cost breakdown.
+    balance_after = token_balance - total_cost
+    return JSONResponse({
+        "tier": "commercial",
+        "task": task,
+        "file_size_bytes": file_size_bytes,
+        "file_size_mb": round(file_size_bytes / (1024 * 1024), 2),
+        "file_size_gb": round(file_size_gb, 4),
+        "area_sqm": round(area_sqm, 2),
+        "area_ha": round(area_ha, 2),
+        "base_cost": C_BASE,
+        "area_cost": area_cost,
+        "size_cost": size_cost,
+        "total_cost": total_cost,
+        "token_balance": token_balance,
+        "balance_after": balance_after,
+        "can_afford": balance_after >= 0,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
 
