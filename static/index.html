@@ -907,7 +907,7 @@
       <h2>TOKEN GUIDE</h2>
       <table>
         <tr><td>1 Token</td><td>= IDR 1,000</td></tr>
-        <tr><td>Free Tier</td><td>Max 30 MB · 3 uploads/day · 0 tokens</td></tr>
+        <tr><td>Free Tier</td><td>Max 50 MB · 1 free trial per feature · 0 tokens</td></tr>
         <tr><td>Commercial</td><td>Unlimited size & uploads · pay-per-use</td></tr>
       </table>
       <div class="formula-box">
@@ -1028,7 +1028,7 @@
       const el = document.getElementById('tier-info');
       if (!el || !currentUser) return;
       if (currentUser.token_balance <= 0) {
-        el.innerHTML = '🆓 Free Tier &mdash; Max 30 MB &bull; 3 uploads/day &bull; <span style="color:#aaa">1 Token = IDR 1.000</span>';
+        el.innerHTML = '🆓 Free Tier &mdash; Max 50 MB &bull; 1 free trial per feature &bull; <span style="color:#aaa">1 Token = IDR 1.000</span>';
         el.className = 'tier-badge tier-free';
       } else {
         el.innerHTML = `💎 Commercial &mdash; ${Number(currentUser.token_balance).toLocaleString()} tokens available &bull; <span style="color:#aaa">1 Token = IDR 1.000</span>`;
@@ -1278,7 +1278,7 @@
       catch(_) { return `Server error ${res.status}`; }
     }
 
-    // Free-tier path: POST file directly (≤30 MB, within Cloud Run 32 MB limit)
+    // Free-tier path: POST file directly (≤50 MB free-tier cap)
     async function runFreeTierInference(file, params) {
       const formData = new FormData();
       formData.append('file', file);
@@ -1349,7 +1349,7 @@
         } else {
           const params = inferenceParams();
           // Commercial users (token_balance > 0) upload via GCS signed URL to bypass
-          // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤30 MB).
+          // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤50 MB cap).
           const isCommercial = currentUser && currentUser.token_balance > 0;
           data = isCommercial
             ? await runCommercialInference(selectedFile, params)

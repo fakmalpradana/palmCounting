@@ -34,6 +34,7 @@ from pydantic import BaseModel
 
 from app.core import firestore_client
 from app.core.config import settings
+from app.core.firestore_client import mark_landcover_free_used, mark_palm_free_used
 from app.core.inference import run_inference
 from app.core.land_cover_inference import LC_PALETTE, run_land_cover_inference
 
@@ -144,8 +145,7 @@ def _purge_old_files(max_age_hours: int = MAX_AGE_HOURS) -> dict:
 C_BASE = 50
 W_AREA = 10    # per hectare
 W_SIZE = 200   # per GB
-FREE_TIER_MAX_BYTES = 30 * 1024 * 1024   # 30 MB
-FREE_TIER_MAX_DAILY = 3
+FREE_TIER_MAX_BYTES = 50 * 1024 * 1024   # 50 MB hard cap for free tier
 
 # Model names are fixed per task — clients cannot override them.
 # This prevents cross-contamination between the YOLO palm model and the
@@ -173,10 +173,6 @@ def get_raster_area_sqm(tif_path: str) -> float:
 
 async def asyncio_to_thread_get_user(uid: str):
     return await asyncio.to_thread(firestore_client.get_user, uid)
-
-
-async def asyncio_to_thread_check_daily(uid: str):
-    return await asyncio.to_thread(firestore_client.check_and_increment_daily_upload, uid)
 
 
 async def asyncio_to_thread_deduct_tokens(uid: str, amount: int):
@@ -275,16 +271,14 @@ async def infer(
         if file_size_bytes > FREE_TIER_MAX_BYTES:
             raise HTTPException(
                 403,
-                f"Quota exceeded: free tier limit is 30 MB. Your file is "
+                f"Quota exceeded: free tier file size limit is 50 MB. Your file is "
                 f"{file_size_bytes / 1024 / 1024:.1f} MB. Add tokens to process larger files.",
             )
-        today = __import__("datetime").date.today().isoformat()
-        last_date = user_data.get("last_upload_date", "")
-        count = user_data.get("daily_upload_count", 0) if last_date == today else 0
-        if count >= FREE_TIER_MAX_DAILY:
+        if user_data.get("free_palm_used", False):
             raise HTTPException(
                 403,
-                "Quota exceeded: free tier allows 3 uploads/day. Add tokens for unlimited access.",
+                "Your one-time free Palm Counting trial has already been used. "
+                "Add tokens to continue.",
             )
 
     # ── Model / YAML checks ──────────────────────────────────────────────
@@ -318,12 +312,16 @@ async def infer(
             raster_path.unlink(missing_ok=True)
             raise HTTPException(402, str(e))
     else:
-        # ── Free tier: atomic daily counter increment ────────────────────
+        # ── Free tier: atomically claim the one-time palm trial ──────────
         try:
-            await asyncio_to_thread_check_daily(current_user["sub"])
+            await asyncio.to_thread(mark_palm_free_used, current_user["sub"])
         except ValueError:
             raster_path.unlink(missing_ok=True)
-            raise HTTPException(429, "Free tier daily limit reached.")
+            raise HTTPException(
+                403,
+                "Your one-time free Palm Counting trial has already been used. "
+                "Add tokens to continue.",
+            )
 
     # ── Inference (unchanged) ────────────────────────────────────────────
     t0 = time.perf_counter()
@@ -398,17 +396,15 @@ async def infer_land_cover(
         if file_size_bytes > FREE_TIER_MAX_BYTES:
             raise HTTPException(
                 403,
-                f"Quota exceeded: free tier limit is 30 MB. "
+                f"Quota exceeded: free tier file size limit is 50 MB. "
                 f"Your file is {file_size_bytes / 1024 / 1024:.1f} MB. "
                 f"Add tokens to process larger files.",
             )
-        today     = __import__("datetime").date.today().isoformat()
-        last_date = user_data.get("last_upload_date", "")
-        count     = user_data.get("daily_upload_count", 0) if last_date == today else 0
-        if count >= FREE_TIER_MAX_DAILY:
+        if user_data.get("free_landcover_used", False):
             raise HTTPException(
                 403,
-                "Quota exceeded: free tier allows 3 uploads/day. Add tokens for unlimited access.",
+                "Your one-time free Land Cover Analysis trial has already been used. "
+                "Add tokens to continue.",
             )
 
     # ── Model check ──────────────────────────────────────────────────────
@@ -436,11 +432,16 @@ async def infer_land_cover(
             raster_path.unlink(missing_ok=True)
             raise HTTPException(402, str(e))
     else:
+        # ── Free tier: atomically claim the one-time land cover trial ────
         try:
-            await asyncio_to_thread_check_daily(current_user["sub"])
+            await asyncio.to_thread(mark_landcover_free_used, current_user["sub"])
         except ValueError:
             raster_path.unlink(missing_ok=True)
-            raise HTTPException(429, "Free tier daily limit reached.")
+            raise HTTPException(
+                403,
+                "Your one-time free Land Cover Analysis trial has already been used. "
+                "Add tokens to continue.",
+            )
 
     # ── Inference ────────────────────────────────────────────────────────
     result_tif     = RESULTS_DIR / f"{file_id}_lc.tif"
