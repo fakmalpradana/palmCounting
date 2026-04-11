@@ -26,17 +26,20 @@ steps:
     args: ['bash', '-c', 'mkdir -p /workspace/models /workspace/app/models/default']
 
   # ── Step 1b: Download model weights from GCS ─────────────
+  # Both models are required: YOLO for palm counting, SwinUnet for land cover.
   - name: 'gcr.io/cloud-builders/gsutil'
     id: 'fetch-model'
     waitFor: ['mkdir-models']
     args:
       - '-m'
       - 'cp'
-      - 'gs://palmcounting-models/models/best_1.onnx'
+      - 'gs://palmcounting-models/models/palmCounting-model.onnx'
+      - 'gs://palmcounting-models/models/unet_swin.onnx'
       - 'gs://palmcounting-models/models/data.yaml'
       - '/workspace/models/'
 
-  # ── Step 1c: Bake default model into app/models/default/ ─
+  # ── Step 1c: Bake both models into app/models/default/ ───
+  # Survives scale-to-zero without a GCS fetch on cold start.
   - name: 'ubuntu'
     id: 'copy-default-model'
     waitFor: ['fetch-model']
@@ -44,8 +47,9 @@ steps:
       - 'bash'
       - '-c'
       - >
-        cp /workspace/models/best_1.onnx /workspace/app/models/default/best_1.onnx &&
-        cp /workspace/models/data.yaml   /workspace/app/models/default/data.yaml
+        cp /workspace/models/palmCounting-model.onnx /workspace/app/models/default/palmCounting-model.onnx &&
+        cp /workspace/models/unet_swin.onnx          /workspace/app/models/default/unet_swin.onnx &&
+        cp /workspace/models/data.yaml               /workspace/app/models/default/data.yaml
 
   # ── Step 2: Build GPU Docker image ───────────────────────
   # Uses Dockerfile.gpu (CUDA 12.2 base + onnxruntime-gpu)

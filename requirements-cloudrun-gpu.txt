@@ -28,6 +28,7 @@ geopandas>=0.14.0
 shapely>=2.0.0
 rtree>=1.0.0
 pyproj>=3.6.0
+topojson>=1.9        # topology-preserving simplification for land cover polygons
 
 # Utilities
 pyyaml>=6.0

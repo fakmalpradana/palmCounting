@@ -1,12 +1,15 @@
 # tests/conftest.py
 import os
 
-# Set env vars BEFORE any app imports — required fields have no defaults
-os.environ.setdefault("GOOGLE_CLIENT_ID", "test-client-id")
-os.environ.setdefault("GOOGLE_CLIENT_SECRET", "test-client-secret")
-os.environ.setdefault("JWT_SECRET", "test-jwt-secret-32-bytes-long-ok!")
-os.environ.setdefault("FIRESTORE_PROJECT_ID", "test-project")
-os.environ.setdefault("FRONTEND_URL", "http://localhost:8080")
+# Set env vars BEFORE any app imports — required fields have no defaults.
+# Use os.environ[] (not setdefault) for DEV_MODE so .env.local cannot override
+# the test environment and cause Firestore mocks to be bypassed.
+os.environ["DEV_MODE"]               = "false"
+os.environ.setdefault("GOOGLE_CLIENT_ID",      "test-client-id")
+os.environ.setdefault("GOOGLE_CLIENT_SECRET",  "test-client-secret")
+os.environ.setdefault("JWT_SECRET",            "test-jwt-secret-32-bytes-long-ok!")
+os.environ.setdefault("FIRESTORE_PROJECT_ID",  "test-project")
+os.environ.setdefault("FRONTEND_URL",          "http://localhost:8080")
 
 import pytest
 from unittest.mock import MagicMock

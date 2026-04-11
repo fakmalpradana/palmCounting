@@ -8,6 +8,20 @@ from app.core.config import settings
 
 SUPERADMIN_EMAIL = "fakmalpradana@gmail.com"
 
+# ── Dev-mode mock user (used when DEV_MODE=true, Firestore is never contacted) ──
+_DEV_USER: dict = {
+    "uid":                  "dev-local-user",
+    "email":                "dev@local.test",
+    "name":                 "Dev User",
+    "avatar":               "",
+    "role":                 "superadmin",
+    "token_balance":        9999,
+    "daily_upload_count":   0,
+    "last_upload_date":     "",
+    "free_palm_used":       False,
+    "free_landcover_used":  False,
+}
+
 _db = None
 
 
@@ -20,6 +34,8 @@ def get_db():
 
 
 def upsert_user(google_uid: str, email: str, name: str, avatar: str) -> dict:
+    if settings.dev_mode:
+        return _DEV_USER
     db = get_db()
     ref = db.collection("users").document(google_uid)
     doc = ref.get()
@@ -38,19 +54,23 @@ def upsert_user(google_uid: str, email: str, name: str, avatar: str) -> dict:
         return {**existing, **updates, "uid": google_uid}
     else:
         data = {
-            "email": email,
-            "name": name,
-            "avatar": avatar,
-            "role": role,
-            "token_balance": 0,
-            "daily_upload_count": 0,
-            "last_upload_date": "",
+            "email":               email,
+            "name":                name,
+            "avatar":              avatar,
+            "role":                role,
+            "token_balance":       0,
+            "daily_upload_count":  0,
+            "last_upload_date":    "",
+            "free_palm_used":      False,
+            "free_landcover_used": False,
         }
         ref.set(data)
         return {**data, "uid": google_uid}
 
 
 def get_user(google_uid: str) -> Optional[dict]:
+    if settings.dev_mode:
+        return _DEV_USER
     db = get_db()
     doc = db.collection("users").document(google_uid).get()
     if not doc.exists:
@@ -59,6 +79,8 @@ def get_user(google_uid: str) -> Optional[dict]:
 
 
 def get_all_users() -> list[dict]:
+    if settings.dev_mode:
+        return [_DEV_USER]
     db = get_db()
     return [{**doc.to_dict(), "uid": doc.id} for doc in db.collection("users").stream()]
 
@@ -85,6 +107,8 @@ def update_token_balance(google_uid: str, delta: int) -> int:
 
 def deduct_tokens(google_uid: str, amount: int) -> int:
     """Atomically deduct tokens. Raises ValueError if balance insufficient."""
+    if settings.dev_mode:
+        return max(0, _DEV_USER["token_balance"] - amount)
     from google.cloud import firestore
 
     db = get_db()
@@ -117,10 +141,61 @@ def update_role(google_uid: str, new_role: str) -> None:
     ref.update({"role": new_role})
 
 
+def mark_palm_free_used(google_uid: str) -> None:
+    """Atomically claim the one-time free palm-counting trial.
+
+    Raises ValueError if the trial has already been used.
+    No-op in dev mode (dev user has tokens, so free-tier path is never reached).
+    """
+    if settings.dev_mode:
+        return
+    from google.cloud import firestore
+
+    db = get_db()
+    ref = db.collection("users").document(google_uid)
+
+    @firestore.transactional
+    def _txn(transaction, ref):
+        snap = ref.get(transaction=transaction)
+        if not snap.exists:
+            raise ValueError("User not found")
+        if snap.to_dict().get("free_palm_used", False):
+            raise ValueError("Free palm-counting trial already used")
+        transaction.update(ref, {"free_palm_used": True})
+
+    _txn(db.transaction(), ref)
+
+
+def mark_landcover_free_used(google_uid: str) -> None:
+    """Atomically claim the one-time free land-cover trial.
+
+    Raises ValueError if the trial has already been used.
+    """
+    if settings.dev_mode:
+        return
+    from google.cloud import firestore
+
+    db = get_db()
+    ref = db.collection("users").document(google_uid)
+
+    @firestore.transactional
+    def _txn(transaction, ref):
+        snap = ref.get(transaction=transaction)
+        if not snap.exists:
+            raise ValueError("User not found")
+        if snap.to_dict().get("free_landcover_used", False):
+            raise ValueError("Free land-cover trial already used")
+        transaction.update(ref, {"free_landcover_used": True})
+
+    _txn(db.transaction(), ref)
+
+
 def check_and_increment_daily_upload(google_uid: str) -> dict:
     """Reset counter if date changed, increment, return updated counts.
     Raises ValueError if daily limit (3) is reached.
     """
+    if settings.dev_mode:
+        return {"daily_upload_count": 1, "last_upload_date": date.today().isoformat()}
     from google.cloud import firestore
 
     db = get_db()

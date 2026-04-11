@@ -1,5 +1,6 @@
 # Copyright © 2026 Geo AI Twinverse.
 # Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+from __future__ import annotations  # allows X | Y union hints on Python 3.9
 """
 /api/inference          — upload GeoTIFF → GeoJSON detections (+ timing).
 /api/preview/<id>       — stretched-RGB PNG for the map overlay.
@@ -34,7 +35,9 @@ from pydantic import BaseModel
 
 from app.core import firestore_client
 from app.core.config import settings
+from app.core.firestore_client import mark_landcover_free_used, mark_palm_free_used
 from app.core.inference import run_inference
+from app.core.land_cover_inference import LC_PALETTE, run_land_cover_inference
 
 log = logging.getLogger(__name__)
 
@@ -143,8 +146,14 @@ def _purge_old_files(max_age_hours: int = MAX_AGE_HOURS) -> dict:
 C_BASE = 50
 W_AREA = 10    # per hectare
 W_SIZE = 200   # per GB
-FREE_TIER_MAX_BYTES = 30 * 1024 * 1024   # 30 MB
-FREE_TIER_MAX_DAILY = 3
+FREE_TIER_MAX_BYTES = 50 * 1024 * 1024   # 50 MB hard cap for free tier
+
+# Model names are fixed per task — clients cannot override them.
+# This prevents cross-contamination between the YOLO palm model and the
+# SwinUnet land-cover model (e.g. running unet_swin.onnx against the YOLO
+# inference pipeline would produce an ONNX shape-mismatch crash).
+PALM_MODEL_NAME = "palmCounting-model.onnx"
+LANDCOVER_MODEL_NAME = "unet_swin.onnx"
 
 
 def calculate_tokens(l_sqm: float, s_gb: float) -> int:
@@ -165,10 +174,6 @@ def get_raster_area_sqm(tif_path: str) -> float:
 
 async def asyncio_to_thread_get_user(uid: str):
     return await asyncio.to_thread(firestore_client.get_user, uid)
-
-
-async def asyncio_to_thread_check_daily(uid: str):
-    return await asyncio.to_thread(firestore_client.check_and_increment_daily_upload, uid)
 
 
 async def asyncio_to_thread_deduct_tokens(uid: str, amount: int):
@@ -234,13 +239,95 @@ def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight cost estimate (no inference, no token deduction)
+# ---------------------------------------------------------------------------
+
+@router.post("/inference/preflight")
+async def preflight_check(
+    file: UploadFile = File(...),
+    task: str = Form("palm"),  # "palm" | "land_cover"
+    current_user: dict = Depends(get_current_user),
+):
+    """Read raster metadata and return a token cost estimate.
+
+    Accepts the GeoTIFF, reads its header with rasterio, computes the cost
+    breakdown, then discards the file.  No inference is run and no tokens are
+    deducted.  The frontend shows this breakdown in the confirmation modal
+    before the user commits to a full inference run.
+    """
+    if not file.filename.lower().endswith((".tif", ".tiff")):
+        raise HTTPException(400, "Only GeoTIFF files are accepted.")
+
+    file_bytes = await file.read()
+    file_size_bytes = len(file_bytes)
+    file_size_gb = file_size_bytes / (1024 ** 3)
+
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance = user_data.get("token_balance", 0)
+
+    # Write to a temp path just long enough to read raster metadata.
+    import tempfile
+    tmp_id = uuid.uuid4().hex
+    tmp_path = UPLOAD_DIR / f"_preflight_{tmp_id}.tif"
+    try:
+        tmp_path.write_bytes(file_bytes)
+        area_sqm = await asyncio.to_thread(get_raster_area_sqm, str(tmp_path))
+    except Exception as exc:
+        raise HTTPException(422, f"Could not read raster metadata: {exc}")
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    area_ha = area_sqm / 10_000
+    area_cost = math.ceil((area_sqm / 10_000) * W_AREA)
+    size_cost = math.ceil(file_size_gb * W_SIZE)
+    total_cost = math.ceil(C_BASE + area_cost + size_cost)
+
+    # Free-tier users: no token math needed; surface trial status instead.
+    if token_balance == 0:
+        trial_field = "free_palm_used" if task == "palm" else "free_landcover_used"
+        trial_used = user_data.get(trial_field, False)
+        over_size = file_size_bytes > FREE_TIER_MAX_BYTES
+        return JSONResponse({
+            "tier": "free",
+            "task": task,
+            "file_size_bytes": file_size_bytes,
+            "file_size_mb": round(file_size_bytes / (1024 * 1024), 2),
+            "area_ha": round(area_ha, 2),
+            "trial_used": trial_used,
+            "over_size_limit": over_size,
+            "free_tier_max_mb": FREE_TIER_MAX_BYTES // (1024 * 1024),
+        })
+
+    # Commercial tier: full cost breakdown.
+    balance_after = token_balance - total_cost
+    return JSONResponse({
+        "tier": "commercial",
+        "task": task,
+        "file_size_bytes": file_size_bytes,
+        "file_size_mb": round(file_size_bytes / (1024 * 1024), 2),
+        "file_size_gb": round(file_size_gb, 4),
+        "area_sqm": round(area_sqm, 2),
+        "area_ha": round(area_ha, 2),
+        "base_cost": C_BASE,
+        "area_cost": area_cost,
+        "size_cost": size_cost,
+        "total_cost": total_cost,
+        "token_balance": token_balance,
+        "balance_after": balance_after,
+        "can_afford": balance_after >= 0,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
 
 @router.post("/inference")
 async def infer(
     file: UploadFile = File(...),
-    model_name: str = Form("best_1.onnx"),
     tile_width: int = Form(640),
     tile_height: int = Form(640),
     min_distance: float = Form(1.0),
@@ -268,22 +355,20 @@ async def infer(
         if file_size_bytes > FREE_TIER_MAX_BYTES:
             raise HTTPException(
                 403,
-                f"Quota exceeded: free tier limit is 30 MB. Your file is "
+                f"Quota exceeded: free tier file size limit is 50 MB. Your file is "
                 f"{file_size_bytes / 1024 / 1024:.1f} MB. Add tokens to process larger files.",
             )
-        today = __import__("datetime").date.today().isoformat()
-        last_date = user_data.get("last_upload_date", "")
-        count = user_data.get("daily_upload_count", 0) if last_date == today else 0
-        if count >= FREE_TIER_MAX_DAILY:
+        if user_data.get("free_palm_used", False):
             raise HTTPException(
                 403,
-                "Quota exceeded: free tier allows 3 uploads/day. Add tokens for unlimited access.",
+                "Your one-time free Palm Counting trial has already been used. "
+                "Add tokens to continue.",
             )
 
     # ── Model / YAML checks ──────────────────────────────────────────────
-    model_path = _resolve_model_path(model_name)
+    model_path = _resolve_model_path(PALM_MODEL_NAME)
     if not model_path.exists():
-        raise HTTPException(404, f"Model '{model_name}' not found. Upload it first.")
+        raise HTTPException(404, f"Palm counting model '{PALM_MODEL_NAME}' not found. Upload it first.")
     yaml_path = _resolve_yaml_path()
     if not yaml_path.exists():
         raise HTTPException(500, f"data.yaml not found at {yaml_path}")
@@ -311,12 +396,16 @@ async def infer(
             raster_path.unlink(missing_ok=True)
             raise HTTPException(402, str(e))
     else:
-        # ── Free tier: atomic daily counter increment ────────────────────
+        # ── Free tier: atomically claim the one-time palm trial ──────────
         try:
-            await asyncio_to_thread_check_daily(current_user["sub"])
+            await asyncio.to_thread(mark_palm_free_used, current_user["sub"])
         except ValueError:
             raster_path.unlink(missing_ok=True)
-            raise HTTPException(429, "Free tier daily limit reached.")
+            raise HTTPException(
+                403,
+                "Your one-time free Palm Counting trial has already been used. "
+                "Add tokens to continue.",
+            )
 
     # ── Inference (unchanged) ────────────────────────────────────────────
     t0 = time.perf_counter()
@@ -348,6 +437,198 @@ async def infer(
         "tokens_deducted": tokens_deducted,
         "geojson": geojson,
     })
+
+
+# ---------------------------------------------------------------------------
+# Land Cover inference
+# ---------------------------------------------------------------------------
+
+@router.post("/inference/land-cover")
+async def infer_land_cover(
+    file: UploadFile = File(...),
+    in_channels: int = Form(3),
+    tile_size: int = Form(512),
+    overlap: int = Form(128),
+    use_filter: bool = Form(True),
+    min_noise_size: int = Form(250),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Land cover classification: GeoTIFF in → polygon GeoJSON + classified raster out.
+
+    Returns the same billing envelope as /api/inference, with an additional
+    ``task_type: "land_cover"`` field and a ``class_summary`` in the metadata.
+    The classified GeoTIFF is stored server-side so /api/preview/land-cover/<id>
+    can render it with the class colour palette.
+    """
+    if not file.filename.lower().endswith((".tif", ".tiff")):
+        raise HTTPException(400, "Only GeoTIFF files (.tif / .tiff) are accepted.")
+
+    file_bytes      = await file.read()
+    file_size_bytes = len(file_bytes)
+    file_size_gb    = file_size_bytes / (1024 ** 3)
+
+    # ── Fetch user for tier decision ─────────────────────────────────────
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance = user_data.get("token_balance", 0)
+
+    # ── Free tier pre-checks ─────────────────────────────────────────────
+    if token_balance == 0:
+        if file_size_bytes > FREE_TIER_MAX_BYTES:
+            raise HTTPException(
+                403,
+                f"Quota exceeded: free tier file size limit is 50 MB. "
+                f"Your file is {file_size_bytes / 1024 / 1024:.1f} MB. "
+                f"Add tokens to process larger files.",
+            )
+        if user_data.get("free_landcover_used", False):
+            raise HTTPException(
+                403,
+                "Your one-time free Land Cover Analysis trial has already been used. "
+                "Add tokens to continue.",
+            )
+
+    # ── Model check ──────────────────────────────────────────────────────
+    model_path = _resolve_model_path(LANDCOVER_MODEL_NAME)
+    if not model_path.exists():
+        raise HTTPException(404, f"Land cover model '{LANDCOVER_MODEL_NAME}' not found. Upload it first.")
+
+    # ── Save upload ──────────────────────────────────────────────────────
+    file_id      = str(uuid.uuid4())
+    raster_path  = UPLOAD_DIR / f"{file_id}.tif"
+    raster_path.write_bytes(file_bytes)
+
+    # ── Billing ──────────────────────────────────────────────────────────
+    tokens_deducted = 0
+    if token_balance > 0:
+        l_sqm = await asyncio.to_thread(get_raster_area_sqm, str(raster_path))
+        cost  = calculate_tokens(l_sqm=l_sqm, s_gb=file_size_gb)
+        if cost > token_balance:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(402, f"Insufficient tokens: have {token_balance}, need {cost}")
+        try:
+            await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+            tokens_deducted = cost
+        except ValueError as e:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(402, str(e))
+    else:
+        # ── Free tier: atomically claim the one-time land cover trial ────
+        try:
+            await asyncio.to_thread(mark_landcover_free_used, current_user["sub"])
+        except ValueError:
+            raster_path.unlink(missing_ok=True)
+            raise HTTPException(
+                403,
+                "Your one-time free Land Cover Analysis trial has already been used. "
+                "Add tokens to continue.",
+            )
+
+    # ── Inference ────────────────────────────────────────────────────────
+    result_tif     = RESULTS_DIR / f"{file_id}_lc.tif"
+    result_geojson = RESULTS_DIR / f"{file_id}_lc.geojson"
+
+    t0 = time.perf_counter()
+    try:
+        geojson = await asyncio.to_thread(
+            run_land_cover_inference,
+            str(raster_path),
+            str(model_path),
+            in_channels=in_channels,
+            tile_size=tile_size,
+            overlap=overlap,
+            use_filter=use_filter,
+            min_noise_size=min_noise_size,
+            result_tif_path=str(result_tif),
+        )
+    except Exception as exc:
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(500, f"Land cover inference failed: {exc}") from exc
+
+    duration = round(time.perf_counter() - t0, 2)
+    geojson["metadata"]["duration_seconds"] = duration
+
+    result_geojson.write_text(json.dumps(geojson, indent=2))
+
+    return JSONResponse({
+        "file_id":          file_id,
+        "task_type":        "land_cover",
+        "duration_seconds": duration,
+        "tokens_deducted":  tokens_deducted,
+        "geojson":          geojson,
+    })
+
+
+# ---------------------------------------------------------------------------
+# Land Cover preview (palette-coloured PNG)
+# ---------------------------------------------------------------------------
+
+@router.get("/preview/land-cover/{file_id}")
+def get_land_cover_preview(file_id: str):
+    """
+    Return a palette-coloured PNG of the classified raster stored at
+    results/{file_id}_lc.tif, with WGS84 bounds in response headers.
+    """
+    _validate_file_id(file_id)
+    path = RESULTS_DIR / f"{file_id}_lc.tif"
+    if not path.exists():
+        raise HTTPException(404, "Land cover result not found. Run inference first.")
+
+    with rasterio.open(path) as src:
+        bounds_wgs84 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
+        data         = src.read(1)   # single-band class indices (uint8)
+
+    # Map class indices to RGB using the palette
+    h, w = data.shape
+    rgb  = np.zeros((h, w, 3), dtype=np.uint8)
+    for cls_id, color in LC_PALETTE.items():
+        rgb[data == cls_id] = color
+
+    img = Image.fromarray(rgb)
+    if max(img.size) > 2048:
+        ratio = 2048 / max(img.size)
+        img = img.resize(
+            (int(img.size[0] * ratio), int(img.size[1] * ratio)), Image.LANCZOS)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    buf.seek(0)
+
+    bw, bs, be, bn = bounds_wgs84
+    return Response(
+        content=buf.getvalue(),
+        media_type="image/png",
+        headers={
+            "X-Raster-West":  str(bw), "X-Raster-South": str(bs),
+            "X-Raster-East":  str(be), "X-Raster-North": str(bn),
+            "Access-Control-Expose-Headers":
+                "X-Raster-West,X-Raster-South,X-Raster-East,X-Raster-North",
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Land Cover GeoJSON download
+# ---------------------------------------------------------------------------
+
+@router.get("/download/land-cover/{file_id}")
+def download_land_cover_result(file_id: str):
+    """Download the land-cover polygon GeoJSON for a completed inference run."""
+    _validate_file_id(file_id)
+    path = RESULTS_DIR / f"{file_id}_lc.geojson"
+    if not path.exists():
+        raise HTTPException(404, "Land cover result not found. Run inference first.")
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/geo+json",
+        headers={
+            "Content-Disposition":
+                f'attachment; filename="land_cover_{file_id[:8]}.geojson"'
+        },
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -460,7 +741,6 @@ class PresignRequest(BaseModel):
 
 class SubmitRequest(BaseModel):
     gcs_path: str
-    model_name: str = "best_1.onnx"
     tile_width: int = 640
     tile_height: int = 640
     min_distance: float = 1.0
@@ -536,7 +816,7 @@ async def submit_gcs_inference(
                     f"{settings.gpu_worker_url}/api/inference/internal",
                     json={
                         "gcs_path": body.gcs_path,
-                        "model_name": body.model_name,
+                        "model_name": PALM_MODEL_NAME,
                         "tile_width": body.tile_width,
                         "tile_height": body.tile_height,
                         "min_distance": body.min_distance,
@@ -580,10 +860,10 @@ async def submit_gcs_inference(
     file_size_bytes = raster_path.stat().st_size
     file_size_gb = file_size_bytes / (1024 ** 3)
 
-    model_path = _resolve_model_path(body.model_name)
+    model_path = _resolve_model_path(PALM_MODEL_NAME)
     if not model_path.exists():
         raster_path.unlink(missing_ok=True)
-        raise HTTPException(404, f"Model '{body.model_name}' not found.")
+        raise HTTPException(404, f"Palm counting model '{PALM_MODEL_NAME}' not found.")
     yaml_path = _resolve_yaml_path()
     if not yaml_path.exists():
         raster_path.unlink(missing_ok=True)

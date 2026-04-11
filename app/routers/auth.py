@@ -54,6 +54,30 @@ async def asyncio_to_thread_upsert_user(uid: str, email: str, name: str, avatar:
     return await asyncio.to_thread(firestore_client.upsert_user, uid, email, name, avatar)
 
 
+@router.get("/dev-login")
+async def dev_login():
+    """
+    Local development only — bypasses Google OAuth and Firestore entirely.
+    Only active when DEV_MODE=true in .env.  Returns 404 in production.
+    """
+    if not settings.dev_mode:
+        raise HTTPException(404, "Not found")
+
+    from app.core import firestore_client as _fc
+    dev_user = _fc._DEV_USER
+
+    access_token  = create_access_token({
+        "sub":   dev_user["uid"],
+        "email": dev_user["email"],
+        "role":  dev_user["role"],
+    })
+    refresh_token = create_refresh_token({"sub": dev_user["uid"]})
+
+    response = RedirectResponse(settings.frontend_url)
+    _set_refresh_cookie(response, refresh_token)
+    return response
+
+
 @router.get("/login")
 async def login():
     state = secrets.token_urlsafe(16)
