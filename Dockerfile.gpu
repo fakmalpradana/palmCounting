@@ -1,11 +1,12 @@
 # ============================================================
-# Palm Counter — GPU Dockerfile for Cloud Run (NVIDIA L4 · CUDA 12.2)
+# Palm Counter — GPU Dockerfile for Cloud Run (NVIDIA L4 · CUDA 12.4)
 # Copyright © 2026 Geo AI Twinverse.
 # Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
 #
 # Strategy:
-#   • nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
-#     Matches Cloud Run NVIDIA L4 driver 535.x / CUDA 12.2 exactly.
+#   • nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+#     Compatible with Cloud Run NVIDIA L4 driver (CUDA 12.4+).
+#     Note: tag format changed from cudnn8/cudnn9 → cudnn in 12.4+.
 #   • Python 3.11 installed via deadsnakes PPA
 #   • onnxruntime-gpu replaces onnxruntime — inference.py auto-selects
 #     CUDAExecutionProvider when it is available (no code changes needed).
@@ -13,7 +14,7 @@
 #   • --no-cpu-throttling required in Cloud Run deploy (GPU keeps CPU busy).
 # ============================================================
 
-FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 

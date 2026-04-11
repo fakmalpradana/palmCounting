@@ -85,7 +85,7 @@ jobs:
       # ── 4. Submit GPU build to Cloud Build ─────────────────
       # Uses cloudbuild-gpu.yaml which:
       #   Step 1: Downloads ONNX weights from GCS
-      #   Step 2: Builds Dockerfile.gpu (nvidia/cuda:12.2 + onnxruntime-gpu)
+      #   Step 2: Builds Dockerfile.gpu (nvidia/cuda:12.4 + onnxruntime-gpu)
       #   Step 3: Pushes palm-counter-gpu image to Artifact Registry
       #   Step 4: Deploys palm-counter-gpu Cloud Run service with L4 GPU flags
       - name: 🏗️ Build & Deploy GPU Service via Cloud Build

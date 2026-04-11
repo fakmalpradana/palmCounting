@@ -52,7 +52,7 @@ steps:
         cp /workspace/models/data.yaml               /workspace/app/models/default/data.yaml
 
   # ── Step 2: Build GPU Docker image ───────────────────────
-  # Uses Dockerfile.gpu (CUDA 12.2 base + onnxruntime-gpu)
+  # Uses Dockerfile.gpu (CUDA 12.4 base + onnxruntime-gpu)
   - name: 'gcr.io/cloud-builders/docker'
     id: 'docker-build'
     waitFor: ['copy-default-model']
