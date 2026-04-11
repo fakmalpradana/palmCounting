@@ -1,5 +1,6 @@
 # Copyright © 2026 Geo AI Twinverse.
 # Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+from __future__ import annotations  # allows X | Y union hints on Python 3.9
 """
 Land Cover Classification inference pipeline for the palmCounting API.
 

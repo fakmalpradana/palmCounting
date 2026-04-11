@@ -1,5 +1,4 @@
 # tests/test_billing.py
-from datetime import date
 from pathlib import Path
 from unittest.mock import AsyncMock
 import pytest
@@ -39,44 +38,43 @@ def test_token_calculation_returns_int():
 
 # ── Route tests ────────────────────────────────────────────────────────
 
-def test_free_tier_blocked_over_30mb(client, access_token, mocker):
-    """Free tier (balance=0) rejects files over 30 MB."""
+def test_free_tier_blocked_over_50mb(client, access_token, mocker):
+    """Free tier (balance=0) rejects files over 50 MB."""
     mocker.patch(
         "app.routers.inference.asyncio_to_thread_get_user",
         new_callable=AsyncMock,
         return_value={
             "uid": "uid123", "email": "t@t.com", "role": "user",
             "token_balance": 0, "daily_upload_count": 0, "last_upload_date": "",
+            "free_palm_used": False, "free_landcover_used": False,
         },
     )
-    big_content = b"0" * (31 * 1024 * 1024)
+    big_content = b"0" * (51 * 1024 * 1024)  # 51 MB — over the 50 MB cap
     resp = client.post(
         "/api/inference",
         files={"file": ("test.tif", big_content, "image/tiff")},
-        data={"model_name": "palmCounting-model.onnx"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    assert resp.status_code == 403   # our pre-check returns 403 (Forbidden), not 413
+    assert resp.status_code == 403
 
 
-def test_free_tier_daily_limit_enforced(client, access_token, mocker):
-    """Free tier users who uploaded 3 times today get 403 (pre-check fast-fail)."""
-    today = date.today().isoformat()
+def test_free_tier_trial_already_used(client, access_token, mocker):
+    """Free tier users whose one-time palm trial is already used get 403."""
     mocker.patch(
         "app.routers.inference.asyncio_to_thread_get_user",
         new_callable=AsyncMock,
         return_value={
             "uid": "uid123", "email": "t@t.com", "role": "user",
-            "token_balance": 0, "daily_upload_count": 3, "last_upload_date": today,
+            "token_balance": 0, "daily_upload_count": 0, "last_upload_date": "",
+            "free_palm_used": True, "free_landcover_used": False,
         },
     )
     resp = client.post(
         "/api/inference",
         files={"file": ("test.tif", b"0" * 1024, "image/tiff")},
-        data={"model_name": "palmCounting-model.onnx"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
-    assert resp.status_code == 403   # pre-check (cached count) returns 403, not 429
+    assert resp.status_code == 403
 
 
 def test_commercial_tier_insufficient_tokens(client, access_token, mocker):
@@ -87,6 +85,7 @@ def test_commercial_tier_insufficient_tokens(client, access_token, mocker):
         return_value={
             "uid": "uid123", "email": "t@t.com", "role": "user",
             "token_balance": 10, "daily_upload_count": 0, "last_upload_date": "",
+            "free_palm_used": False, "free_landcover_used": False,
         },
     )
     mocker.patch("app.routers.inference.get_raster_area_sqm", return_value=1_000_000.0)
@@ -96,7 +95,6 @@ def test_commercial_tier_insufficient_tokens(client, access_token, mocker):
     resp = client.post(
         "/api/inference",
         files={"file": ("test.tif", b"0" * 1024, "image/tiff")},
-        data={"model_name": "palmCounting-model.onnx"},
         headers={"Authorization": f"Bearer {access_token}"},
     )
     assert resp.status_code == 402

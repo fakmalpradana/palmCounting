@@ -1,5 +1,6 @@
 # Copyright © 2026 Geo AI Twinverse.
 # Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+from __future__ import annotations  # allows X | Y union hints on Python 3.9
 """
 /api/inference          — upload GeoTIFF → GeoJSON detections (+ timing).
 /api/preview/<id>       — stretched-RGB PNG for the map overlay.
