@@ -1067,7 +1067,7 @@
       <h2>TOKEN GUIDE</h2>
       <table>
         <tr><td>1 Token</td><td>= IDR 1,000</td></tr>
-        <tr><td>Free Tier</td><td>Max 50 MB · 1 free trial per feature · 0 tokens</td></tr>
+        <tr><td>Free Tier</td><td>Max 25 MB · 1 free trial per feature · 0 tokens</td></tr>
         <tr><td>Commercial</td><td>Unlimited size & uploads · pay-per-use</td></tr>
       </table>
       <div class="formula-box">
@@ -1521,9 +1521,31 @@
       return res.json();
     }
 
-    // Commercial path: signed URL → PUT to GCS → submit gcs_path for inference
-    async function runCommercialInference(file, params) {
-      // Step 1: get signed URL
+    // Cloud Run's hard request-body limit is 32 MB.
+    // Files above this threshold must go via GCS signed URL to bypass it.
+    const DIRECT_UPLOAD_MAX = 30 * 1024 * 1024; // 30 MB (safe margin)
+
+    // XHR-based PUT with progress events (fetch has no upload progress API).
+    function uploadFileWithProgress(signedUrl, file, onPct) {
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.upload.addEventListener('progress', e => {
+          if (e.lengthComputable) onPct(Math.round(e.loaded / e.total * 100));
+        });
+        xhr.addEventListener('load', () => {
+          if (xhr.status >= 200 && xhr.status < 300) resolve(xhr);
+          else reject(new Error(`GCS upload failed (${xhr.status})`));
+        });
+        xhr.addEventListener('error', () => reject(new Error('Network error during upload')));
+        xhr.open('PUT', signedUrl);
+        xhr.setRequestHeader('Content-Type', 'image/tiff');
+        xhr.send(file);
+      });
+    }
+
+    // Upload file to GCS via signed URL, return gcs_path.
+    // Used by both the large-file preflight and by inference itself.
+    async function uploadToGcs(file, onPct) {
       const presignRes = await authFetch('/api/upload/signed-url', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1531,16 +1553,19 @@
       });
       if (!presignRes.ok) throw new Error('Failed to get upload URL: ' + await parseErrorResponse(presignRes));
       const { upload_url, gcs_path } = await presignRes.json();
+      await uploadFileWithProgress(upload_url, file, onPct || (() => {}));
+      return gcs_path;
+    }
 
-      // Step 2: PUT file directly to GCS (bypasses Cloud Run 32 MB limit)
-      const putRes = await fetch(upload_url, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'image/tiff' },
-        body: file,
-      });
-      if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
+    // Commercial path: if gcs_path already exists from preflight, skip re-upload.
+    async function runCommercialInference(file, params, existingGcsPath = null) {
+      let gcs_path = existingGcsPath;
 
-      // Step 3: trigger inference with gcs_path
+      if (!gcs_path) {
+        // Small file: upload now (large files already uploaded during preflight)
+        gcs_path = await uploadToGcs(file, null);
+      }
+
       const submitRes = await authFetch('/api/inference/submit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1550,15 +1575,31 @@
       return submitRes.json();
     }
 
-    // Land cover inference — direct POST (same billing as free tier path;
-    // commercial large-file GCS path can be added later if needed).
-    async function runLandCoverInference(file) {
+    // Land cover: direct POST for small files; GCS submit for large files.
+    async function runLandCoverInference(file, existingGcsPath = null) {
+      const lcParams = {
+        tile_size:      document.getElementById('lc-tile-size').value,
+        overlap:        document.getElementById('lc-overlap').value,
+        min_noise_size: document.getElementById('lc-noise').value,
+        use_filter:     document.getElementById('lc-filter').value,
+      };
+
+      if (existingGcsPath || file.size > DIRECT_UPLOAD_MAX) {
+        // Large file path: use GCS-backed endpoint to bypass 32 MB limit
+        const gcs_path = existingGcsPath || await uploadToGcs(file, null);
+        const submitRes = await authFetch('/api/inference/submit-land-cover', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ gcs_path, ...lcParams }),
+        });
+        if (!submitRes.ok) throw new Error(await parseErrorResponse(submitRes));
+        return submitRes.json();
+      }
+
+      // Small file: direct POST
       const formData = new FormData();
-      formData.append('file',          file);
-      formData.append('tile_size',     document.getElementById('lc-tile-size').value);
-      formData.append('overlap',       document.getElementById('lc-overlap').value);
-      formData.append('min_noise_size',document.getElementById('lc-noise').value);
-      formData.append('use_filter',    document.getElementById('lc-filter').value);
+      formData.append('file', file);
+      Object.entries(lcParams).forEach(([k, v]) => formData.append(k, v));
       const res = await authFetch('/api/inference/land-cover', { method: 'POST', body: formData });
       if (!res.ok) throw new Error(await parseErrorResponse(res));
       return res.json();
@@ -1568,6 +1609,7 @@
     // Pre-flight modal logic
     // ----------------------------------------------------------
     let _pendingInference = null; // set by showPreflightModal, executed on confirm
+    let _pendingGcsPath   = null; // gcs_path from large-file preflight; reused for inference
 
     const preflightModal  = document.getElementById('preflight-modal');
     const pfCancelBtn     = document.getElementById('pf-cancel-btn');
@@ -1658,17 +1700,39 @@
     async function showPreflightModal(file, isLc) {
       const origLabel = btnRun.textContent;
       btnRun.disabled    = true;
-      btnRun.textContent = 'CALCULATING…';
       errorMsg.style.display = 'none';
+      _pendingGcsPath = null;
 
       try {
-        const formData = new FormData();
-        formData.append('file', file);
-        formData.append('task', isLc ? 'land_cover' : 'palm');
+        let data;
 
-        const res = await authFetch('/api/inference/preflight', { method: 'POST', body: formData });
-        if (!res.ok) throw new Error(await parseErrorResponse(res));
-        const data = await res.json();
+        if (file.size > DIRECT_UPLOAD_MAX) {
+          // ── Large file: upload to GCS first, then read metadata via vsigs ──
+          btnRun.textContent = 'UPLOADING 0%…';
+          const gcs_path = await uploadToGcs(file, pct => {
+            btnRun.textContent = `UPLOADING ${pct}%…`;
+          });
+          btnRun.textContent = 'CALCULATING…';
+
+          const res = await authFetch('/api/inference/preflight-gcs', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ gcs_path, task: isLc ? 'land_cover' : 'palm' }),
+          });
+          if (!res.ok) throw new Error(await parseErrorResponse(res));
+          data = await res.json();
+          _pendingGcsPath = gcs_path; // reuse for inference — no second upload
+
+        } else {
+          // ── Small file: direct upload to preflight endpoint ──
+          btnRun.textContent = 'CALCULATING…';
+          const formData = new FormData();
+          formData.append('file', file);
+          formData.append('task', isLc ? 'land_cover' : 'palm');
+          const res = await authFetch('/api/inference/preflight', { method: 'POST', body: formData });
+          if (!res.ok) throw new Error(await parseErrorResponse(res));
+          data = await res.json();
+        }
 
         populatePreflightModal(data, isLc);
         _pendingInference = () => runInferenceFlow(file, isLc);
@@ -1683,9 +1747,14 @@
       }
     }
 
-    // Core inference flow — called after the user confirms in the modal
+    // Core inference flow — called after the user confirms in the modal.
+    // If _pendingGcsPath is set the file was already uploaded during preflight;
+    // inference functions reuse that path and skip a second upload.
     async function runInferenceFlow(file, isLc) {
-      const displayModel = isLc ? 'unet_swin.onnx' : 'palmCounting-model.onnx';
+      const displayModel  = isLc ? 'unet_swin.onnx' : 'palmCounting-model.onnx';
+      const savedGcsPath  = _pendingGcsPath;
+      _pendingGcsPath     = null;
+
       errorMsg.style.display = 'none';
       showScreen('screen-loading');
       startLoadingAnimation(isLc);
@@ -1693,14 +1762,14 @@
       try {
         let data;
         if (isLc) {
-          data = await runLandCoverInference(file);
+          // Pass pre-uploaded GCS path so large land cover files skip re-upload
+          data = await runLandCoverInference(file, savedGcsPath);
         } else {
           const params = inferenceParams();
-          // Commercial users (token_balance > 0) upload via GCS signed URL to bypass
-          // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤50 MB cap).
           const isCommercial = currentUser && currentUser.token_balance > 0;
           data = isCommercial
-            ? await runCommercialInference(file, params)
+            // savedGcsPath (if set) skips the GCS upload step entirely
+            ? await runCommercialInference(file, params, savedGcsPath)
             : await runFreeTierInference(file, params);
         }
 

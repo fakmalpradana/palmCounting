@@ -38,8 +38,8 @@ def test_token_calculation_returns_int():
 
 # ── Route tests ────────────────────────────────────────────────────────
 
-def test_free_tier_blocked_over_50mb(client, access_token, mocker):
-    """Free tier (balance=0) rejects files over 50 MB."""
+def test_free_tier_blocked_over_25mb(client, access_token, mocker):
+    """Free tier (balance=0) rejects files over 25 MB (Cloud Run direct-upload cap)."""
     mocker.patch(
         "app.routers.inference.asyncio_to_thread_get_user",
         new_callable=AsyncMock,
@@ -49,7 +49,7 @@ def test_free_tier_blocked_over_50mb(client, access_token, mocker):
             "free_palm_used": False, "free_landcover_used": False,
         },
     )
-    big_content = b"0" * (51 * 1024 * 1024)  # 51 MB — over the 50 MB cap
+    big_content = b"0" * (26 * 1024 * 1024)  # 26 MB — over the 25 MB cap
     resp = client.post(
         "/api/inference",
         files={"file": ("test.tif", big_content, "image/tiff")},

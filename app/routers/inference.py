@@ -146,7 +146,12 @@ def _purge_old_files(max_age_hours: int = MAX_AGE_HOURS) -> dict:
 C_BASE = 50
 W_AREA = 10    # per hectare
 W_SIZE = 200   # per GB
-FREE_TIER_MAX_BYTES = 50 * 1024 * 1024   # 50 MB hard cap for free tier
+# Cloud Run's hard request-body limit is 32 MB and cannot be increased.
+# Free-tier users upload directly (no GCS bypass), so the practical cap
+# must stay below that ceiling.  25 MB gives comfortable headroom for
+# multipart overhead.  Commercial users have no limit — they upload via
+# GCS signed URLs which bypass Cloud Run entirely.
+FREE_TIER_MAX_BYTES = 25 * 1024 * 1024   # 25 MB — Cloud Run direct-upload limit
 
 # Model names are fixed per task — clients cannot override them.
 # This prevents cross-contamination between the YOLO palm model and the
@@ -322,6 +327,185 @@ async def preflight_check(
 
 
 # ---------------------------------------------------------------------------
+# Pre-flight for large files already uploaded to GCS
+# ---------------------------------------------------------------------------
+
+class PreflightGcsRequest(BaseModel):
+    gcs_path: str
+    task: str = "palm"  # "palm" | "land_cover"
+
+
+@router.post("/inference/preflight-gcs")
+async def preflight_check_gcs(
+    body: PreflightGcsRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Cost estimate for a file that is already in GCS.
+
+    Used when the file is too large for Cloud Run's 32 MB request limit.
+    File size is read from GCS blob metadata; raster area is read via
+    rasterio's /vsigs/ GDAL driver (header-only, no full download).
+    Returns the same JSON envelope as /api/inference/preflight.
+    """
+    expected_prefix = f"uploads/{current_user['sub']}/"
+    if not body.gcs_path.startswith(expected_prefix):
+        raise HTTPException(403, "gcs_path does not belong to the authenticated user")
+
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance = user_data.get("token_balance", 0)
+    if token_balance == 0:
+        raise HTTPException(403, "Large-file preflight requires a commercial tier account")
+
+    # File size from GCS blob metadata — fast, no download
+    try:
+        gcs_client = gcs.Client(project=settings.firestore_project_id)
+        blob = gcs_client.bucket(settings.gcs_bucket_name).blob(body.gcs_path)
+        await asyncio.to_thread(blob.reload)
+        file_size_bytes: int = blob.size  # type: ignore[assignment]
+    except Exception as exc:
+        raise HTTPException(500, f"Could not read GCS file metadata: {exc}")
+
+    file_size_gb = file_size_bytes / (1024 ** 3)
+
+    # Raster area via GDAL /vsigs/ — reads only the TIFF IFD, not pixel data
+    vsigs_path = f"/vsigs/{settings.gcs_bucket_name}/{body.gcs_path}"
+    try:
+        area_sqm = await asyncio.to_thread(get_raster_area_sqm, vsigs_path)
+    except Exception as exc:
+        log.warning("preflight-gcs: vsigs area read failed (%s) — falling back to 0", exc)
+        area_sqm = 0.0
+
+    area_ha   = area_sqm / 10_000
+    area_cost = math.ceil((area_sqm / 10_000) * W_AREA)
+    size_cost = math.ceil(file_size_gb * W_SIZE)
+    total_cost = math.ceil(C_BASE + area_cost + size_cost)
+    balance_after = token_balance - total_cost
+
+    return JSONResponse({
+        "tier":           "commercial",
+        "task":           body.task,
+        "file_size_bytes": file_size_bytes,
+        "file_size_mb":   round(file_size_bytes / (1024 * 1024), 2),
+        "file_size_gb":   round(file_size_gb, 4),
+        "area_sqm":       round(area_sqm, 2),
+        "area_ha":        round(area_ha, 2),
+        "base_cost":      C_BASE,
+        "area_cost":      area_cost,
+        "size_cost":      size_cost,
+        "total_cost":     total_cost,
+        "token_balance":  token_balance,
+        "balance_after":  balance_after,
+        "can_afford":     balance_after >= 0,
+        "gcs_path":       body.gcs_path,   # echoed back so frontend can reuse it
+    })
+
+
+# ---------------------------------------------------------------------------
+# GCS-backed land cover submit (commercial tier, large files)
+# ---------------------------------------------------------------------------
+
+class SubmitLandCoverRequest(BaseModel):
+    gcs_path: str
+    tile_size: int = 512
+    overlap: int = 128
+    use_filter: bool = True
+    min_noise_size: int = 250
+    in_channels: int = 3
+
+
+@router.post("/inference/submit-land-cover")
+async def submit_gcs_land_cover(
+    body: SubmitLandCoverRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Commercial tier: run land cover inference on a file already in GCS.
+
+    Downloads the raster from GCS, runs the SwinUnet pipeline, deducts
+    tokens, and returns the polygon GeoJSON.  Mirrors /api/inference/submit
+    but for the land-cover task.
+    """
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data or user_data.get("token_balance", 0) <= 0:
+        raise HTTPException(403, "Submit endpoint is for commercial tier only")
+
+    expected_prefix = f"uploads/{current_user['sub']}/"
+    if not body.gcs_path.startswith(expected_prefix):
+        raise HTTPException(403, "gcs_path does not belong to the authenticated user")
+
+    token_balance = user_data.get("token_balance", 0)
+    if token_balance < C_BASE:
+        raise HTTPException(402, "Insufficient token balance to initiate inference")
+
+    # Download from GCS
+    gcs_client = gcs.Client(project=settings.firestore_project_id)
+    blob = gcs_client.bucket(settings.gcs_bucket_name).blob(body.gcs_path)
+
+    file_id      = str(uuid.uuid4())
+    raster_path  = UPLOAD_DIR / f"{file_id}.tif"
+    result_tif   = RESULTS_DIR / f"{file_id}_lc.tif"
+    result_geojson = RESULTS_DIR / f"{file_id}_lc.geojson"
+
+    try:
+        await asyncio.to_thread(blob.download_to_filename, str(raster_path))
+    except Exception as exc:
+        raise HTTPException(500, f"Failed to download file from GCS: {exc}")
+
+    file_size_gb = raster_path.stat().st_size / (1024 ** 3)
+
+    # Check model
+    model_path = _resolve_model_path(LANDCOVER_MODEL_NAME)
+    if not model_path.exists():
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(404, f"Land cover model '{LANDCOVER_MODEL_NAME}' not found.")
+
+    # Billing pre-check
+    l_sqm = await asyncio.to_thread(get_raster_area_sqm, str(raster_path))
+    cost  = calculate_tokens(l_sqm=l_sqm, s_gb=file_size_gb)
+    if cost > token_balance:
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(402, f"Insufficient tokens: have {token_balance}, need {cost}")
+
+    # Inference
+    t0 = time.perf_counter()
+    try:
+        geojson = await asyncio.to_thread(
+            run_land_cover_inference,
+            str(raster_path),
+            str(model_path),
+            in_channels=body.in_channels,
+            tile_size=body.tile_size,
+            overlap=body.overlap,
+            use_filter=body.use_filter,
+            min_noise_size=body.min_noise_size,
+            result_tif_path=str(result_tif),
+        )
+    except Exception as exc:
+        raster_path.unlink(missing_ok=True)
+        raise HTTPException(500, f"Land cover inference failed: {exc}") from exc
+
+    duration = round(time.perf_counter() - t0, 2)
+    geojson["metadata"]["duration_seconds"] = duration
+    result_geojson.write_text(json.dumps(geojson, indent=2))
+
+    # Deduct tokens atomically
+    try:
+        await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
+    except ValueError as exc:
+        raise HTTPException(402, str(exc))
+
+    return JSONResponse({
+        "file_id":          file_id,
+        "task_type":        "land_cover",
+        "duration_seconds": duration,
+        "tokens_deducted":  cost,
+        "geojson":          geojson,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Inference
 # ---------------------------------------------------------------------------
 
@@ -355,7 +539,7 @@ async def infer(
         if file_size_bytes > FREE_TIER_MAX_BYTES:
             raise HTTPException(
                 403,
-                f"Quota exceeded: free tier file size limit is 50 MB. Your file is "
+                f"Quota exceeded: free tier file size limit is 25 MB. Your file is "
                 f"{file_size_bytes / 1024 / 1024:.1f} MB. Add tokens to process larger files.",
             )
         if user_data.get("free_palm_used", False):
@@ -480,7 +664,7 @@ async def infer_land_cover(
         if file_size_bytes > FREE_TIER_MAX_BYTES:
             raise HTTPException(
                 403,
-                f"Quota exceeded: free tier file size limit is 50 MB. "
+                f"Quota exceeded: free tier file size limit is 25 MB. "
                 f"Your file is {file_size_bytes / 1024 / 1024:.1f} MB. "
                 f"Add tokens to process larger files.",
             )
