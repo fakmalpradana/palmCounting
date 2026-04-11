@@ -147,6 +147,13 @@ W_SIZE = 200   # per GB
 FREE_TIER_MAX_BYTES = 30 * 1024 * 1024   # 30 MB
 FREE_TIER_MAX_DAILY = 3
 
+# Model names are fixed per task — clients cannot override them.
+# This prevents cross-contamination between the YOLO palm model and the
+# SwinUnet land-cover model (e.g. running unet_swin.onnx against the YOLO
+# inference pipeline would produce an ONNX shape-mismatch crash).
+PALM_MODEL_NAME = "palmCounting-model.onnx"
+LANDCOVER_MODEL_NAME = "unet_swin.onnx"
+
 
 def calculate_tokens(l_sqm: float, s_gb: float) -> int:
     """Token cost: C_base + ((L_sqm / 10000) * W_area) + (S_gb * W_size)."""
@@ -241,7 +248,6 @@ def generate_signed_upload_url(user_uid: str, filename: str) -> tuple[str, str]:
 @router.post("/inference")
 async def infer(
     file: UploadFile = File(...),
-    model_name: str = Form("palmCounting-model.onnx"),
     tile_width: int = Form(640),
     tile_height: int = Form(640),
     min_distance: float = Form(1.0),
@@ -282,9 +288,9 @@ async def infer(
             )
 
     # ── Model / YAML checks ──────────────────────────────────────────────
-    model_path = _resolve_model_path(model_name)
+    model_path = _resolve_model_path(PALM_MODEL_NAME)
     if not model_path.exists():
-        raise HTTPException(404, f"Model '{model_name}' not found. Upload it first.")
+        raise HTTPException(404, f"Palm counting model '{PALM_MODEL_NAME}' not found. Upload it first.")
     yaml_path = _resolve_yaml_path()
     if not yaml_path.exists():
         raise HTTPException(500, f"data.yaml not found at {yaml_path}")
@@ -358,7 +364,6 @@ async def infer(
 @router.post("/inference/land-cover")
 async def infer_land_cover(
     file: UploadFile = File(...),
-    model_name: str = Form("unet_swin.onnx"),
     in_channels: int = Form(3),
     tile_size: int = Form(512),
     overlap: int = Form(128),
@@ -407,9 +412,9 @@ async def infer_land_cover(
             )
 
     # ── Model check ──────────────────────────────────────────────────────
-    model_path = _resolve_model_path(model_name)
+    model_path = _resolve_model_path(LANDCOVER_MODEL_NAME)
     if not model_path.exists():
-        raise HTTPException(404, f"Model '{model_name}' not found. Upload it first.")
+        raise HTTPException(404, f"Land cover model '{LANDCOVER_MODEL_NAME}' not found. Upload it first.")
 
     # ── Save upload ──────────────────────────────────────────────────────
     file_id      = str(uuid.uuid4())
@@ -651,7 +656,6 @@ class PresignRequest(BaseModel):
 
 class SubmitRequest(BaseModel):
     gcs_path: str
-    model_name: str = "palmCounting-model.onnx"
     tile_width: int = 640
     tile_height: int = 640
     min_distance: float = 1.0
@@ -727,7 +731,7 @@ async def submit_gcs_inference(
                     f"{settings.gpu_worker_url}/api/inference/internal",
                     json={
                         "gcs_path": body.gcs_path,
-                        "model_name": body.model_name,
+                        "model_name": PALM_MODEL_NAME,
                         "tile_width": body.tile_width,
                         "tile_height": body.tile_height,
                         "min_distance": body.min_distance,
@@ -771,10 +775,10 @@ async def submit_gcs_inference(
     file_size_bytes = raster_path.stat().st_size
     file_size_gb = file_size_bytes / (1024 ** 3)
 
-    model_path = _resolve_model_path(body.model_name)
+    model_path = _resolve_model_path(PALM_MODEL_NAME)
     if not model_path.exists():
         raster_path.unlink(missing_ok=True)
-        raise HTTPException(404, f"Model '{body.model_name}' not found.")
+        raise HTTPException(404, f"Palm counting model '{PALM_MODEL_NAME}' not found.")
     yaml_path = _resolve_yaml_path()
     if not yaml_path.exists():
         raster_path.unlink(missing_ok=True)

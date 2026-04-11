@@ -1262,9 +1262,8 @@
     // Run inference
     // ----------------------------------------------------------
 
-    function inferenceParams(chosenModel) {
+    function inferenceParams() {
       return {
-        model_name:     chosenModel,
         conf_threshold: parseFloat(document.getElementById('conf').value),
         nms_threshold:  parseFloat(document.getElementById('nms').value),
         min_distance:   parseFloat(document.getElementById('min-dist').value),
@@ -1320,10 +1319,9 @@
 
     // Land cover inference — direct POST (same billing as free tier path;
     // commercial large-file GCS path can be added later if needed).
-    async function runLandCoverInference(file, chosenModel) {
+    async function runLandCoverInference(file) {
       const formData = new FormData();
       formData.append('file',          file);
-      formData.append('model_name',    chosenModel);
       formData.append('tile_size',     document.getElementById('lc-tile-size').value);
       formData.append('overlap',       document.getElementById('lc-overlap').value);
       formData.append('min_noise_size',document.getElementById('lc-noise').value);
@@ -1335,10 +1333,11 @@
 
     btnRun.addEventListener('click', async () => {
       if (!selectedFile) return;
-      const chosenModel = modelSelect.value;
-      if (!chosenModel) { errorMsg.textContent = '⚠ Select a model first.'; errorMsg.style.display = 'block'; return; }
 
       const isLc = taskLcInput.checked;
+      // Model names are fixed per task on the backend; derive display name here.
+      const displayModel = isLc ? 'unet_swin.onnx' : 'palmCounting-model.onnx';
+
       errorMsg.style.display = 'none';
       showScreen('screen-loading');
       startLoadingAnimation(isLc);
@@ -1346,9 +1345,9 @@
       try {
         let data;
         if (isLc) {
-          data = await runLandCoverInference(selectedFile, chosenModel);
+          data = await runLandCoverInference(selectedFile);
         } else {
-          const params = inferenceParams(chosenModel);
+          const params = inferenceParams();
           // Commercial users (token_balance > 0) upload via GCS signed URL to bypass
           // the Cloud Run 32 MB request limit. Free tier uses direct POST (≤30 MB).
           const isCommercial = currentUser && currentUser.token_balance > 0;
@@ -1367,7 +1366,7 @@
         currentTaskType = data.task_type || 'palm_counting';
         stopLoadingAnimation(data.geojson.metadata.count);
         await new Promise(r => setTimeout(r, 600));
-        await buildMap(data, chosenModel);
+        await buildMap(data, displayModel);
         showScreen('screen-map');
 
       } catch (err) {
