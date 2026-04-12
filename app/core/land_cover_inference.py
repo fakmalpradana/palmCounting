@@ -12,13 +12,18 @@ Public entry point:
     run_land_cover_inference(input_tif_path, model_path, **kwargs) -> dict
 """
 
+import gc
 import logging
+import os
+import tempfile
 import time
+from pathlib import Path
 
 import cv2
 import geopandas as gpd
 import numpy as np
 import rasterio
+import rasterio.windows as rwin
 from rasterio.features import shapes, sieve
 from rasterio.warp import transform_bounds
 from shapely.geometry import shape
@@ -61,6 +66,11 @@ _MIN_NOISE_SIZE  = 250
 # rows at a time instead of the full raster, capping peak RAM to ~1 GB per
 # strip for a 10 000-column, 8-class image (vs. 9+ GB for full allocation).
 _STRIP_HEIGHT    = 2048
+# Pixel-count threshold above which in-memory sieve is skipped to avoid OOM.
+# Below the threshold: pred (uint8) + downsampled buffers fit well within 16 GiB.
+# Above the threshold: windowed inference already gives clean class masks;
+# noise removal is skipped and a warning is logged instead.
+_OOM_SIEVE_THRESHOLD = 2_000_000_000   # 2 billion pixels ≈ 44 800 × 44 800
 _TARGET_RES_M    = 0.5
 _CLAHE_CLIP      = 2.0
 _CLAHE_GRID      = 8
@@ -257,6 +267,124 @@ def _sliding_window(
     return pred_full
 
 
+def _sliding_window_windowed(
+    session,
+    src,          # open rasterio.DatasetReader — pixel data read on demand
+    n_classes: int,
+    tile_size: int,
+    overlap: int,
+    in_channels: int,
+    dst,          # open rasterio.DatasetWriter — predictions written on demand
+) -> None:
+    """
+    True windowed I/O sliding-window inference.
+
+    The full raster is **never loaded into RAM**.  For each horizontal strip of
+    ``_STRIP_HEIGHT`` rows:
+
+    1. Read the strip (plus ``tile_size`` rows of context padding) from *src*
+       using ``rasterio.windows``.
+    2. Apply CLAHE contrast enhancement to the strip.
+    3. Run the Hanning-blended tile loop (same algorithm as ``_sliding_window``).
+    4. Write the strip's argmax predictions immediately to *dst*.
+    5. Delete all temporary buffers and call ``gc.collect()`` before the next
+       strip — this keeps VRAM/RAM usage bounded regardless of raster size.
+
+    Peak RAM per strip ≈ n_classes × (STRIP_HEIGHT + 2×tile_size) × W × 4 bytes.
+    For an 8-class model on a 45 000-column raster: ~4.6 GB/strip with 16 GiB
+    available — well within budget.
+    """
+    H, W   = src.height, src.width
+    step   = tile_size - overlap
+    wm     = _weight_mask(tile_size, overlap)
+    inp_nm = session.get_inputs()[0].name
+    pad    = tile_size   # context rows added on each side of every strip
+
+    n_strips = max(1, -(-H // _STRIP_HEIGHT))   # ceiling division
+    log.info(
+        "Land-cover windowed I/O: %dx%d px processed in %d strip(s) of %d rows",
+        W, H, n_strips, _STRIP_HEIGHT,
+    )
+
+    row = 0
+    while row < H:
+        ext_y0 = max(0, row - pad)
+        ext_y1 = min(H, row + _STRIP_HEIGHT + pad)
+
+        # ── 1. Windowed read from disk ──────────────────────────────────────
+        read_win = rwin.Window(
+            col_off=0, row_off=ext_y0,
+            width=W,   height=ext_y1 - ext_y0,
+        )
+        strip = src.read(window=read_win)   # shape: (C, sh, W)
+        sh    = strip.shape[1]
+
+        # ── 2. CLAHE contrast enhancement for this strip ────────────────────
+        strip = _apply_clahe(strip)
+
+        # ── 3. Per-strip probability accumulator ────────────────────────────
+        prob = np.zeros((n_classes, sh, W), dtype=np.float32)
+        cnt  = np.zeros((sh, W),           dtype=np.float32)
+
+        for y in range(0, sh, step):
+            for x in range(0, W, step):
+                ye = min(y + tile_size, sh)
+                xe = min(x + tile_size, W)
+                patch = strip[:, y:ye, x:xe].astype(np.float32).transpose(1, 2, 0)
+                ph, pw = patch.shape[:2]
+
+                if patch.max() > 1.0:
+                    patch /= 255.0
+
+                nc = patch.shape[2]
+                if nc < in_channels:
+                    patch = np.concatenate(
+                        [patch] + [patch[:, :, -1:]] * (in_channels - nc), axis=-1)
+                elif nc > in_channels:
+                    patch = patch[:, :, :in_channels]
+
+                if ph < tile_size or pw < tile_size:
+                    patch = np.pad(
+                        patch,
+                        ((0, tile_size - ph), (0, tile_size - pw), (0, 0)),
+                    )
+
+                tensor = patch.transpose(2, 0, 1)[None].astype(np.float32)
+                probs  = session.run(None, {inp_nm: tensor})[0][0]  # (C, T, T)
+
+                if probs.shape[0] > n_classes:
+                    probs = probs[-n_classes:]
+
+                probs   = probs[:, :ph, :pw]
+                wm_crop = wm[:ph, :pw]
+                for c in range(n_classes):
+                    prob[c, y:ye, x:xe] += probs[c] * wm_crop
+                cnt[y:ye, x:xe] += wm_crop
+
+        # Average overlapping predictions within this strip
+        safe  = np.where(cnt == 0, 1.0, cnt)
+        prob /= safe[None]
+
+        # Core rows (excluding context padding)
+        core_y0 = row - ext_y0
+        core_y1 = min(row + _STRIP_HEIGHT, H) - ext_y0
+        core_h  = core_y1 - core_y0
+
+        core_pred = np.argmax(
+            prob[:, core_y0:core_y1].astype(np.float32), axis=0,
+        ).astype(np.uint8)
+
+        # ── 4. Windowed write — persist predictions immediately ─────────────
+        write_win = rwin.Window(col_off=0, row_off=row, width=W, height=core_h)
+        dst.write(core_pred[np.newaxis], window=write_win)
+
+        # ── 5. Aggressive memory release before next strip ──────────────────
+        del prob, cnt, strip, core_pred
+        gc.collect()
+
+        row += _STRIP_HEIGHT
+
+
 def _remove_noise(data: np.ndarray, min_size: int) -> np.ndarray:
     """
     Two-pass sieve filter (global pass then per-class pass) directly
@@ -400,9 +528,10 @@ def run_land_cover_inference(
     n_classes     = min(n_classes_out, len(LC_PALETTE))
     log.info("Land-cover: %d model classes, %d palette classes", n_classes_out, n_classes)
 
-    # 2. Read input raster
+    # 2. Read raster HEADER ONLY — never call src.read() without a window.
+    #    For a 2 GB compressed TIF, a full read would expand to 10–20 GB in RAM
+    #    and OOM the container before inference even starts.
     with rasterio.open(input_tif_path) as src:
-        img          = src.read()
         meta         = src.meta.copy()
         bounds_wgs84 = list(transform_bounds(src.crs, "EPSG:4326", *src.bounds))
         orig_crs     = src.crs
@@ -410,31 +539,88 @@ def run_land_cover_inference(
         orig_w       = src.width
         orig_tf      = src.transform
 
-    # 3. CLAHE contrast enhancement (per-band)
-    img = _apply_clahe(img)
+    total_pixels = orig_h * orig_w
+    log.info(
+        "Land-cover: raster %d×%d = %d MP (%s)",
+        orig_w, orig_h, total_pixels // 1_000_000,
+        "windowed I/O" if total_pixels > 0 else "empty",
+    )
 
-    # 4. Sliding-window inference
-    pred = _sliding_window(session, img, n_classes, tile_size, overlap, in_channels)
+    # Always write predictions to a TIF — windowed writing is the only way to
+    # process massive rasters without keeping the full pred array in memory.
+    # If the caller supplied result_tif_path, use it directly; otherwise use
+    # a temp file that is cleaned up after vectorisation.
+    _own_tif = (result_tif_path is None)
+    if _own_tif:
+        tmp_fd, _tmp = tempfile.mkstemp(suffix="_lc_tmp.tif")
+        os.close(tmp_fd)
+        _tif_path = Path(_tmp)
+    else:
+        _tif_path = Path(result_tif_path)
 
-    # 5. Post-processing — downsample → sieve → upsample
+    # 3+4. CLAHE + sliding-window inference — read strip-by-strip from disk,
+    #      write predictions strip-by-strip to _tif_path.  Peak RAM is bounded
+    #      to ~one strip's accumulator regardless of total raster size.
+    lc_meta = meta.copy()
+    lc_meta.update({"count": 1, "dtype": "uint8", "compress": "lzw"})
+    with rasterio.open(input_tif_path) as src, \
+         rasterio.open(str(_tif_path), "w", **lc_meta) as dst:
+        _sliding_window_windowed(
+            session, src, n_classes, tile_size, overlap, in_channels, dst,
+        )
+    log.info("Land-cover: windowed inference complete → %s", _tif_path)
+    gc.collect()
+
+    # 5. Post-processing — sieve noise removal.
+    #    The pred array is uint8 (1 byte/px) — much cheaper than the raw input.
+    #    For rasters above _OOM_SIEVE_THRESHOLD pixels we skip sieve to avoid
+    #    OOM; the blended strip predictions are already clean.
     if use_filter:
-        log.info("Land-cover: applying sieve noise removal…")
-        down, down_meta = _downsample(pred, meta, target_resolution)
-        cleaned         = _remove_noise(down, min_noise_size)
-        pred            = _upsample(cleaned, orig_h, orig_w)
+        if total_pixels <= _OOM_SIEVE_THRESHOLD:
+            log.info("Land-cover: applying sieve noise removal (%d MP)…",
+                     total_pixels // 1_000_000)
+            with rasterio.open(str(_tif_path)) as tsrc:
+                pred = tsrc.read(1)            # uint8, 1 byte/px
+            down, _ = _downsample(pred, {**meta, "width": orig_w,
+                                          "height": orig_h, "transform": orig_tf},
+                                  target_resolution)
+            cleaned  = _remove_noise(down, min_noise_size)
+            pred     = _upsample(cleaned, orig_h, orig_w)
+            del down, cleaned
+            gc.collect()
+            # Write sieved result back to the TIF
+            with rasterio.open(str(_tif_path), "r+") as tdst:
+                tdst.write(pred.astype("uint8"), 1)
+        else:
+            log.warning(
+                "Land-cover: sieve noise removal skipped — raster is %d MP "
+                "(> %d MP threshold); increase _OOM_SIEVE_THRESHOLD or RAM to enable.",
+                total_pixels // 1_000_000,
+                _OOM_SIEVE_THRESHOLD // 1_000_000,
+            )
+            with rasterio.open(str(_tif_path)) as tsrc:
+                pred = tsrc.read(1)
+    else:
+        with rasterio.open(str(_tif_path)) as tsrc:
+            pred = tsrc.read(1)
 
-    # 6. Persist classified GeoTIFF for the preview endpoint
+    # 6. Classified GeoTIFF — already written incrementally during step 3+4.
     if result_tif_path:
-        lc_meta = meta.copy()
-        lc_meta.update({"count": 1, "dtype": "uint8", "compress": "lzw"})
-        with rasterio.open(result_tif_path, "w", **lc_meta) as dst:
-            dst.write(pred.astype("uint8"), 1)
         log.info("Classified GeoTIFF saved: %s", result_tif_path)
 
     # 7. Vectorise — raster class indices → polygon GeoDataFrame
     log.info("Land-cover: vectorising classified raster…")
     vec_meta = {**meta, "transform": orig_tf, "height": orig_h, "width": orig_w}
     gdf      = _vectorize(pred, vec_meta, simplify_tolerance)
+    del pred
+    gc.collect()
+
+    # Clean up temp TIF (only created when result_tif_path was None)
+    if _own_tif:
+        try:
+            _tif_path.unlink(missing_ok=True)
+        except Exception:
+            pass
 
     # 8. Reproject polygons to WGS84 for GeoJSON output
     if not gdf.empty:
