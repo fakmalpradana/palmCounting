@@ -17,6 +17,8 @@
   <!-- Leaflet -->
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <!-- geotiff.js: client-side GeoTIFF parsing for local area calculation -->
+  <script src="https://cdn.jsdelivr.net/npm/geotiff@2/dist-browser/geotiff.js"></script>
 
   <style>
     /* ============================================================
@@ -714,6 +716,24 @@
     .pf-btn-confirm:disabled {
       background: var(--border-hi); color: var(--text-dim); cursor: not-allowed;
     }
+    /* Manual area override — shown when geotiff.js cannot parse the file */
+    .pf-area-override { padding: 8px 26px 0; }
+    .pf-override-notice {
+      font-family: var(--font-mono); font-size: 10px; color: var(--danger);
+      margin-bottom: 6px; display: flex; align-items: center; gap: 5px;
+    }
+    .pf-override-input-row { display: flex; align-items: center; gap: 8px; }
+    .pf-override-label {
+      font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); white-space: nowrap;
+    }
+    .pf-area-manual {
+      background: var(--bg-panel); border: 1px solid var(--border-hi); border-radius: 4px;
+      color: var(--text); font-family: var(--font-mono); font-size: 13px;
+      padding: 4px 8px; width: 110px; outline: none; transition: border-color 0.15s;
+    }
+    .pf-area-manual:focus { border-color: var(--amber); }
+    .pf-area-manual::-webkit-inner-spin-button { opacity: 0.5; }
+    .pf-override-unit { font-family: var(--font-mono); font-size: 10px; color: var(--text-dim); }
 
     /* Token Usage Calculator */
     .calc-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
@@ -1139,6 +1159,17 @@
 
         <!-- Warning (insufficient balance or trial exhausted) -->
         <div id="pf-warning" class="pf-warning"></div>
+
+        <!-- Manual area override (shown when geotiff.js client-side parsing fails) -->
+        <div id="pf-area-override" class="pf-area-override" style="display:none">
+          <div class="pf-override-notice">⚠ Area could not be detected automatically</div>
+          <div class="pf-override-input-row">
+            <span class="pf-override-label">Enter Area:</span>
+            <input type="number" id="pf-area-manual" class="pf-area-manual"
+                   min="0.1" step="0.1" placeholder="e.g. 150" />
+            <span class="pf-override-unit">Hectares</span>
+          </div>
+        </div>
 
         <!-- Actions -->
         <div class="pf-actions">
@@ -1606,10 +1637,60 @@
     }
 
     // ----------------------------------------------------------
+    // Client-side GeoTIFF area extraction (geotiff.js)
+    // Replaces backend rasterio read for the preflight cost estimate.
+    // Falls back gracefully (returns null) so the modal can show a
+    // manual input field instead of blocking the user.
+    // ----------------------------------------------------------
+    async function extractAreaHaFromFile(file) {
+      try {
+        if (typeof GeoTIFF === 'undefined') return null;
+        const tiff  = await GeoTIFF.fromBlob(file);
+        const image = await tiff.getImage();
+        const [west, south, east, north] = image.getBoundingBox();
+        const w = image.getWidth();
+        const h = image.getHeight();
+        if (!w || !h) return null;
+
+        // Detect geographic vs projected CRS by coordinate magnitude.
+        // Geographic (degrees): lon ∈ [-180,180], lat ∈ [-90,90].
+        const isGeo = (
+          Math.abs(west) <= 180 && Math.abs(east) <= 180 &&
+          Math.abs(south) <=  90 && Math.abs(north) <=  90 &&
+          Math.abs(east - west) <=  360
+        );
+
+        let areaSqm;
+        if (isGeo) {
+          // Convert degree extents → metres at the centroid latitude.
+          const midLat  = (south + north) / 2;
+          const cosLat  = Math.cos(midLat * Math.PI / 180);
+          const mPerLat = 111_320;
+          const mPerLon = 111_320 * cosLat;
+          areaSqm = Math.abs(east - west) * mPerLon *
+                    Math.abs(north - south) * mPerLat;
+        } else {
+          // Projected CRS (metres): area = bbox extent product.
+          areaSqm = Math.abs(east - west) * Math.abs(north - south);
+        }
+
+        const ha = areaSqm / 10_000;
+        if (!isFinite(ha) || ha <= 0) return null;
+        return Math.round(ha * 100) / 100;   // 2 d.p.
+      } catch {
+        return null;   // geotiff.js unavailable or unsupported file
+      }
+    }
+
+    // ----------------------------------------------------------
     // Pre-flight modal logic
     // ----------------------------------------------------------
-    let _pendingInference = null; // set by showPreflightModal, executed on confirm
-    let _pendingGcsPath   = null; // gcs_path from large-file preflight; reused for inference
+    let _pendingInference    = null; // set by showPreflightModal, executed on confirm
+    let _pendingGcsPath      = null; // gcs_path from large-file preflight; reused for inference
+    // State persisted for live cost recalculation on manual area input:
+    let _pfFileSizeBytes     = 0;
+    let _pfTokenBalance      = 0;
+    let _pfTier              = 'commercial';
 
     const preflightModal  = document.getElementById('preflight-modal');
     const pfCancelBtn     = document.getElementById('pf-cancel-btn');
@@ -1622,6 +1703,54 @@
     pfCancelBtn.addEventListener('click', closePreflight);
     preflightModal.addEventListener('click', e => { if (e.target === preflightModal) closePreflight(); });
 
+    // Live cost recalculation when the user manually enters an area value.
+    // Mirrors the server formula: cost = 50 + ceil(areaHa*10) + ceil(sizeGb*200)
+    document.getElementById('pf-area-manual').addEventListener('input', function () {
+      const areaHa = parseFloat(this.value);
+      if (!isFinite(areaHa) || areaHa <= 0) {
+        pfConfirmBtn.disabled = true;
+        return;
+      }
+
+      if (_pfTier === 'free') {
+        // Free tier: area doesn't affect tokens, just re-enable confirm.
+        document.getElementById('pf-free-info').textContent =
+          `One-time free trial · Area: ${areaHa.toLocaleString(undefined, { maximumFractionDigits: 1 })} Ha`;
+        pfConfirmBtn.disabled = false;
+        return;
+      }
+
+      // Commercial tier: recompute breakdown inline.
+      const C_BASE = 50, W_AREA = 10, W_SIZE = 200;
+      const sizeGb    = _pfFileSizeBytes / (1024 ** 3);
+      const areaCost  = Math.ceil(areaHa  * W_AREA);
+      const sizeCost  = Math.ceil(sizeGb  * W_SIZE);
+      const total     = C_BASE + areaCost + sizeCost;
+      const balAfter  = _pfTokenBalance - total;
+
+      const areaDisplay = `${areaHa.toLocaleString(undefined, { maximumFractionDigits: 1 })} Ha`;
+      document.getElementById('pf-area-detail').textContent  = areaDisplay;
+      document.getElementById('pf-area-value').textContent   = `${areaCost.toLocaleString()} Tokens`;
+      document.getElementById('pf-total-value').textContent  = `${total.toLocaleString()} Tokens`;
+      document.getElementById('pf-balance-after').textContent = `${balAfter.toLocaleString()} Tokens`;
+      const afterEl = document.getElementById('pf-balance-after');
+      afterEl.className = 'pf-bal-value ' + (balAfter >= 0 ? 'ok' : 'bad');
+
+      const warning = document.getElementById('pf-warning');
+      if (balAfter < 0) {
+        warning.textContent = 'Insufficient token balance. Please contact the admin to top up your account.';
+        warning.classList.add('visible');
+        pfConfirmBtn.disabled = true;
+      } else {
+        warning.classList.remove('visible');
+        pfConfirmBtn.disabled = false;
+      }
+
+      // Make breakdown visible (was hidden while area was unknown).
+      document.getElementById('pf-breakdown-section').style.display = '';
+      document.getElementById('pf-balance-section').style.display   = '';
+    });
+
     pfConfirmBtn.addEventListener('click', async () => {
       closePreflight();
       if (_pendingInference) {
@@ -1631,17 +1760,30 @@
       }
     });
 
-    function populatePreflightModal(data, isLc) {
+    // showOverride=true when geotiff.js could not detect area automatically.
+    function populatePreflightModal(data, isLc, showOverride = false) {
       const taskLabel   = isLc ? 'Land Cover Analysis' : 'Palm Tree Counting';
       const breakSec    = document.getElementById('pf-breakdown-section');
       const balanceSec  = document.getElementById('pf-balance-section');
       const freeInfo    = document.getElementById('pf-free-info');
       const warning     = document.getElementById('pf-warning');
+      const overrideSec = document.getElementById('pf-area-override');
+      const manualInput = document.getElementById('pf-area-manual');
+
+      // Persist state for live recalculation on manual area input.
+      _pfFileSizeBytes = data.file_size_bytes || 0;
+      _pfTokenBalance  = data.token_balance   || 0;
+      _pfTier          = data.tier;
 
       document.getElementById('pf-task-label').textContent = taskLabel;
       freeInfo.classList.remove('visible');
       warning.classList.remove('visible');
       pfConfirmBtn.disabled = false;
+
+      // Show or hide the manual override section.
+      overrideSec.style.display = showOverride ? '' : 'none';
+      manualInput.value = '';
+      if (showOverride) pfConfirmBtn.disabled = true; // require manual entry first
 
       if (data.tier === 'free') {
         document.getElementById('pf-tag').textContent = 'FREE TRIAL';
@@ -1668,73 +1810,89 @@
         // Commercial tier
         document.getElementById('pf-tag').textContent = 'PREFLIGHT CLEARANCE';
         document.getElementById('pf-tag').className   = 'pf-tag';
-        breakSec.style.display   = '';
-        balanceSec.style.display = '';
 
         const sizeMb = data.file_size_mb;
         const sizeDisplay = sizeMb >= 1024
           ? `${(sizeMb / 1024).toFixed(2)} GB`
           : `${sizeMb.toFixed(1)} MB`;
-        const areaDisplay = `${data.area_ha.toLocaleString(undefined, { maximumFractionDigits: 1 })} Ha`;
 
-        document.getElementById('pf-base-value').textContent    = `${data.base_cost.toLocaleString()} Tokens`;
-        document.getElementById('pf-area-detail').textContent   = areaDisplay;
-        document.getElementById('pf-area-value').textContent    = `${data.area_cost.toLocaleString()} Tokens`;
         document.getElementById('pf-size-detail').textContent   = sizeDisplay;
         document.getElementById('pf-size-value').textContent    = `${data.size_cost.toLocaleString()} Tokens`;
-        document.getElementById('pf-total-value').textContent   = `${data.total_cost.toLocaleString()} Tokens`;
+        document.getElementById('pf-base-value').textContent    = `${data.base_cost.toLocaleString()} Tokens`;
         document.getElementById('pf-balance-current').textContent = `${data.token_balance.toLocaleString()} Tokens`;
 
-        const afterEl = document.getElementById('pf-balance-after');
-        afterEl.textContent = `${data.balance_after.toLocaleString()} Tokens`;
-        afterEl.className   = 'pf-bal-value ' + (data.balance_after >= 0 ? 'ok' : 'bad');
+        if (showOverride) {
+          // Area unknown — hide breakdown rows that depend on area until user types.
+          document.getElementById('pf-area-detail').textContent  = 'Unknown — enter below';
+          document.getElementById('pf-area-value').textContent   = '—';
+          document.getElementById('pf-total-value').textContent  = '—';
+          document.getElementById('pf-balance-after').textContent = '—';
+          document.getElementById('pf-balance-after').className  = 'pf-bal-value';
+          breakSec.style.display   = '';   // show so user sees the partial breakdown
+          balanceSec.style.display = '';
+        } else {
+          const areaDisplay = `${data.area_ha.toLocaleString(undefined, { maximumFractionDigits: 1 })} Ha`;
+          document.getElementById('pf-area-detail').textContent   = areaDisplay;
+          document.getElementById('pf-area-value').textContent    = `${data.area_cost.toLocaleString()} Tokens`;
+          document.getElementById('pf-total-value').textContent   = `${data.total_cost.toLocaleString()} Tokens`;
+          document.getElementById('pf-balance-current').textContent = `${data.token_balance.toLocaleString()} Tokens`;
 
-        if (!data.can_afford) {
-          warning.textContent = 'Insufficient token balance. Please contact the admin to top up your account.';
-          warning.classList.add('visible');
-          pfConfirmBtn.disabled = true;
+          const afterEl = document.getElementById('pf-balance-after');
+          afterEl.textContent = `${data.balance_after.toLocaleString()} Tokens`;
+          afterEl.className   = 'pf-bal-value ' + (data.balance_after >= 0 ? 'ok' : 'bad');
+
+          breakSec.style.display   = '';
+          balanceSec.style.display = '';
+
+          if (!data.can_afford) {
+            warning.textContent = 'Insufficient token balance. Please contact the admin to top up your account.';
+            warning.classList.add('visible');
+            pfConfirmBtn.disabled = true;
+          }
         }
       }
     }
 
     async function showPreflightModal(file, isLc) {
       const origLabel = btnRun.textContent;
-      btnRun.disabled    = true;
+      btnRun.disabled        = true;
       errorMsg.style.display = 'none';
-      _pendingGcsPath = null;
+      _pendingGcsPath        = null;
 
       try {
-        let data;
+        const task = isLc ? 'land_cover' : 'palm';
 
+        // ── Step 1: Extract area client-side (instant, no upload needed) ──
+        btnRun.textContent = 'READING FILE…';
+        const areaHa       = await extractAreaHaFromFile(file);
+        const areaDetected = areaHa !== null && areaHa > 0;
+
+        // ── Step 2: For large files upload to GCS now so inference can
+        //           reuse _pendingGcsPath and skip a second upload. ────────
         if (file.size > DIRECT_UPLOAD_MAX) {
-          // ── Large file: upload to GCS first, then read metadata via vsigs ──
           btnRun.textContent = 'UPLOADING 0%…';
           const gcs_path = await uploadToGcs(file, pct => {
             btnRun.textContent = `UPLOADING ${pct}%…`;
           });
-          btnRun.textContent = 'CALCULATING…';
-
-          const res = await authFetch('/api/inference/preflight-gcs', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ gcs_path, task: isLc ? 'land_cover' : 'palm' }),
-          });
-          if (!res.ok) throw new Error(await parseErrorResponse(res));
-          data = await res.json();
-          _pendingGcsPath = gcs_path; // reuse for inference — no second upload
-
-        } else {
-          // ── Small file: direct upload to preflight endpoint ──
-          btnRun.textContent = 'CALCULATING…';
-          const formData = new FormData();
-          formData.append('file', file);
-          formData.append('task', isLc ? 'land_cover' : 'palm');
-          const res = await authFetch('/api/inference/preflight', { method: 'POST', body: formData });
-          if (!res.ok) throw new Error(await parseErrorResponse(res));
-          data = await res.json();
+          _pendingGcsPath = gcs_path;
         }
 
-        populatePreflightModal(data, isLc);
+        // ── Step 3: Ask backend for tier/balance check using known area ──
+        btnRun.textContent = 'CALCULATING…';
+        const res = await authFetch('/api/inference/preflight-quick', {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({
+            task,
+            file_size_bytes: file.size,
+            area_ha:         areaHa ?? 0,
+          }),
+        });
+        if (!res.ok) throw new Error(await parseErrorResponse(res));
+        const data = await res.json();
+
+        // ── Step 4: Populate modal; show manual override when area unknown ──
+        populatePreflightModal(data, isLc, !areaDetected);
         _pendingInference = () => runInferenceFlow(file, isLc);
         preflightModal.classList.add('open');
 

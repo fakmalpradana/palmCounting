@@ -404,6 +404,77 @@ async def preflight_check_gcs(
 
 
 # ---------------------------------------------------------------------------
+# Quick preflight — client supplies area; no file upload or GCS read needed
+# ---------------------------------------------------------------------------
+
+class PreflightQuickRequest(BaseModel):
+    task: str = "palm"            # "palm" | "land_cover"
+    file_size_bytes: int
+    area_ha: float                # computed client-side via geotiff.js
+
+
+@router.post("/inference/preflight-quick")
+async def preflight_quick(
+    body: PreflightQuickRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Cost estimate when the frontend already knows the area (geotiff.js).
+
+    Accepts area_ha and file_size_bytes from the client instead of parsing
+    the raster server-side.  Returns the same JSON envelope as
+    /api/inference/preflight so the frontend modal can be populated
+    identically regardless of which path was used.
+    """
+    user_data = await asyncio_to_thread_get_user(current_user["sub"])
+    if not user_data:
+        raise HTTPException(401, "User record not found")
+
+    token_balance   = user_data.get("token_balance", 0)
+    area_ha         = max(body.area_ha, 0.0)
+    area_sqm        = area_ha * 10_000
+    file_size_bytes = body.file_size_bytes
+    file_size_gb    = file_size_bytes / (1024 ** 3)
+    task            = body.task
+
+    area_cost  = math.ceil((area_sqm / 10_000) * W_AREA)
+    size_cost  = math.ceil(file_size_gb * W_SIZE)
+    total_cost = math.ceil(C_BASE + area_cost + size_cost)
+
+    if token_balance == 0:
+        trial_field = "free_palm_used" if task == "palm" else "free_landcover_used"
+        trial_used  = user_data.get(trial_field, False)
+        over_size   = file_size_bytes > FREE_TIER_MAX_BYTES
+        return JSONResponse({
+            "tier":             "free",
+            "task":             task,
+            "file_size_bytes":  file_size_bytes,
+            "file_size_mb":     round(file_size_bytes / (1024 * 1024), 2),
+            "area_ha":          round(area_ha, 2),
+            "trial_used":       trial_used,
+            "over_size_limit":  over_size,
+            "free_tier_max_mb": FREE_TIER_MAX_BYTES // (1024 * 1024),
+        })
+
+    balance_after = token_balance - total_cost
+    return JSONResponse({
+        "tier":           "commercial",
+        "task":           task,
+        "file_size_bytes": file_size_bytes,
+        "file_size_mb":   round(file_size_bytes / (1024 * 1024), 2),
+        "file_size_gb":   round(file_size_gb, 4),
+        "area_sqm":       round(area_sqm, 2),
+        "area_ha":        round(area_ha, 2),
+        "base_cost":      C_BASE,
+        "area_cost":      area_cost,
+        "size_cost":      size_cost,
+        "total_cost":     total_cost,
+        "token_balance":  token_balance,
+        "balance_after":  balance_after,
+        "can_afford":     balance_after >= 0,
+    })
+
+
+# ---------------------------------------------------------------------------
 # GCS-backed land cover submit (commercial tier, large files)
 # ---------------------------------------------------------------------------
 
