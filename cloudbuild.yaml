@@ -87,10 +87,11 @@ steps:
       - '--platform=managed'
       - '--allow-unauthenticated'
       # unet_swin (SwinTransformer) expands to ~2.3–2.4 GiB at runtime;
-      # 2Gi limit caused repeated OOM kills → 503 on land cover inference.
-      # 4Gi gives headroom for model weights + tiled tensor allocations.
-      - '--memory=4Gi'
-      - '--cpu=2'
+      # strip-based sliding window allocates ~1 GB per strip for large rasters,
+      # but multiple strips + input raster + sieve buffers can spike to 12–14 GiB
+      # for 50+ MB commercial files.  16 GiB gives comfortable headroom.
+      - '--memory=16Gi'
+      - '--cpu=4'
       - '--min-instances=0'
       - '--max-instances=5'
       # Increased from 300s — large raster land cover inference can take

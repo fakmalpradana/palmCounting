@@ -56,6 +56,11 @@ _TILE_SIZE       = 512
 _OVERLAP         = 128
 _IN_CHANNELS     = 3
 _MIN_NOISE_SIZE  = 250
+# Strip height for memory-bounded sliding-window inference.
+# The probability accumulator is only allocated for STRIP_HEIGHT + 2*tile_size
+# rows at a time instead of the full raster, capping peak RAM to ~1 GB per
+# strip for a 10 000-column, 8-class image (vs. 9+ GB for full allocation).
+_STRIP_HEIGHT    = 2048
 _TARGET_RES_M    = 0.5
 _CLAHE_CLIP      = 2.0
 _CLAHE_GRID      = 8
@@ -153,62 +158,103 @@ def _sliding_window(
     """
     Weighted sliding-window inference over a full-scene raster.
 
+    Processes the image in horizontal strips of ``_STRIP_HEIGHT`` rows so
+    that the float32 probability accumulator never exceeds:
+
+        n_classes × (STRIP_HEIGHT + 2 × tile_size) × W × 4 bytes
+
+    For an 8-class model, W=10 000 and the default constants this is ~1 GB
+    per strip instead of 9+ GB for a naïve full-image allocation.
+
+    Each strip includes ``tile_size`` rows of context padding on each side
+    so tiles that straddle a strip boundary have full receptive-field context
+    and Hanning weights are correctly applied; only the "core" rows
+    (without padding) are written to the output.
+
     Returns ``pred_full`` (H, W) uint8 with class indices 0–n_classes.
     """
     H, W   = img.shape[1], img.shape[2]
     step   = tile_size - overlap
     wm     = _weight_mask(tile_size, overlap)
-    prob   = np.zeros((n_classes, H, W), dtype=np.float32)
-    cnt    = np.zeros((H, W), dtype=np.float32)
     inp_nm = session.get_inputs()[0].name
 
-    n_tiles = len(range(0, H, step)) * len(range(0, W, step))
-    log.info("Land-cover: processing %d tiles (%dx%d px image)…", n_tiles, W, H)
+    n_strips = max(1, -(-H // _STRIP_HEIGHT))   # ceiling division
+    n_tiles  = len(range(0, H, step)) * len(range(0, W, step))
+    log.info(
+        "Land-cover: %d tiles (%dx%d px) processed in %d strip(s) of %d rows",
+        n_tiles, W, H, n_strips, _STRIP_HEIGHT,
+    )
 
-    for y in range(0, H, step):
-        for x in range(0, W, step):
-            ye, xe = min(y + tile_size, H), min(x + tile_size, W)
-            patch  = img[:, y:ye, x:xe].astype(np.float32).transpose(1, 2, 0)
-            ph, pw = patch.shape[:2]
+    pred_full = np.zeros((H, W), dtype=np.uint8)
 
-            if patch.max() > 1.0:
-                patch /= 255.0
+    # Context padding: one full tile_size on each side prevents boundary
+    # artefacts where strip-edge tiles would otherwise be truncated.
+    pad = tile_size
 
-            # channel count adjustment
-            nc = patch.shape[2]
-            if nc < in_channels:
-                patch = np.concatenate(
-                    [patch] + [patch[:, :, -1:]] * (in_channels - nc), axis=-1)
-            elif nc > in_channels:
-                patch = patch[:, :, :in_channels]
+    row = 0
+    while row < H:
+        # Extended strip bounds (with context padding, clamped to image)
+        ext_y0 = max(0, row - pad)
+        ext_y1 = min(H, row + _STRIP_HEIGHT + pad)
+        strip  = img[:, ext_y0:ext_y1, :]
+        sh     = strip.shape[1]
 
-            # zero-pad edge tiles to tile_size
-            if ph < tile_size or pw < tile_size:
-                patch = np.pad(patch, ((0, tile_size - ph), (0, tile_size - pw), (0, 0)))
+        # Per-strip probability accumulator — freed at end of each iteration
+        prob = np.zeros((n_classes, sh, W), dtype=np.float32)
+        cnt  = np.zeros((sh, W), dtype=np.float32)
 
-            tensor = patch.transpose(2, 0, 1)[None].astype(np.float32)
-            probs  = session.run(None, {inp_nm: tensor})[0][0]   # (C, T, T)
+        for y in range(0, sh, step):
+            for x in range(0, W, step):
+                ye, xe = min(y + tile_size, sh), min(x + tile_size, W)
+                patch  = strip[:, y:ye, x:xe].astype(np.float32).transpose(1, 2, 0)
+                ph, pw = patch.shape[:2]
 
-            if probs.shape[0] > n_classes:
-                probs = probs[-n_classes:]
+                if patch.max() > 1.0:
+                    patch /= 255.0
 
-            probs    = probs[:, :ph, :pw]
-            wm_crop  = wm[:ph, :pw]
-            for c in range(n_classes):
-                prob[c, y:ye, x:xe] += probs[c] * wm_crop
-            cnt[y:ye, x:xe] += wm_crop
+                # channel count adjustment
+                nc = patch.shape[2]
+                if nc < in_channels:
+                    patch = np.concatenate(
+                        [patch] + [patch[:, :, -1:]] * (in_channels - nc), axis=-1)
+                elif nc > in_channels:
+                    patch = patch[:, :, :in_channels]
 
-    # average overlapping predictions
-    safe = np.where(cnt == 0, 1.0, cnt)
-    prob /= safe[None]
+                # zero-pad edge tiles to tile_size
+                if ph < tile_size or pw < tile_size:
+                    patch = np.pad(
+                        patch, ((0, tile_size - ph), (0, tile_size - pw), (0, 0)))
 
-    # argmax in row chunks to stay within memory
-    pred = np.zeros((H, W), dtype=np.uint8)
-    for y0 in range(0, H, 2048):
-        y1 = min(y0 + 2048, H)
-        pred[y0:y1] = np.argmax(prob[:, y0:y1].astype(np.float32), axis=0)
+                tensor = patch.transpose(2, 0, 1)[None].astype(np.float32)
+                probs  = session.run(None, {inp_nm: tensor})[0][0]   # (C, T, T)
 
-    return pred
+                if probs.shape[0] > n_classes:
+                    probs = probs[-n_classes:]
+
+                probs   = probs[:, :ph, :pw]
+                wm_crop = wm[:ph, :pw]
+                for c in range(n_classes):
+                    prob[c, y:ye, x:xe] += probs[c] * wm_crop
+                cnt[y:ye, x:xe] += wm_crop
+
+        # Average overlapping predictions within this strip
+        safe  = np.where(cnt == 0, 1.0, cnt)
+        prob /= safe[None]
+
+        # Map strip-local coordinates back to global image coordinates.
+        # Only the "core" rows (excluding context padding) go into the output.
+        core_y0 = row - ext_y0                    # start of core within strip
+        core_y1 = min(row + _STRIP_HEIGHT, H) - ext_y0  # end of core within strip
+        core_h  = core_y1 - core_y0
+
+        pred_full[row: row + core_h] = np.argmax(
+            prob[:, core_y0:core_y1].astype(np.float32), axis=0
+        ).astype(np.uint8)
+
+        del prob, cnt   # release strip memory before allocating the next strip
+        row += _STRIP_HEIGHT
+
+    return pred_full
 
 
 def _remove_noise(data: np.ndarray, min_size: int) -> np.ndarray:
