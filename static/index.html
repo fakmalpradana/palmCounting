@@ -1080,6 +1080,117 @@
     .nj-btn-next:hover:not(:disabled) { background: var(--amber-light); box-shadow: 0 0 16px var(--amber-glow); }
     .nj-btn-next:disabled { background: var(--border-hi); color: var(--text-dim); cursor: not-allowed; }
     .nj-step-indicator { font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; }
+
+    /* ============================================================
+       JOB APPROVAL MODAL
+    ============================================================ */
+    .approval-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.88); backdrop-filter: blur(4px);
+      z-index: 9100; align-items: center; justify-content: center;
+    }
+    .approval-overlay.open { display: flex; }
+
+    .approval-card {
+      background: var(--bg-card); border: 1px solid var(--border-hi);
+      border-top: 3px solid var(--amber);
+      width: min(520px, 95vw); position: relative; overflow: hidden;
+      animation: pf-rise 0.28s cubic-bezier(0.22,1,0.36,1) both;
+    }
+    .approval-card::before {
+      content:''; position:absolute; inset:0; pointer-events:none; z-index:0;
+      background: repeating-linear-gradient(
+        0deg, transparent, transparent 3px,
+        rgba(75,196,106,0.015) 3px, rgba(75,196,106,0.015) 4px
+      );
+    }
+    .ap-inner { position: relative; z-index: 1; }
+
+    .ap-header {
+      padding: 20px 26px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; justify-content: space-between;
+    }
+    .ap-tag {
+      display: inline-block; font-size: 9px; letter-spacing: 0.18em;
+      text-transform: uppercase; background: var(--amber-glow);
+      border: 1px solid var(--amber); color: var(--amber);
+      padding: 3px 9px; margin-bottom: 8px;
+    }
+    .ap-title  { font-family: var(--font-display); font-size: 24px; letter-spacing: 0.05em; color: var(--text); line-height:1; }
+    .ap-sub    { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); margin-top: 5px; }
+    .ap-corner { text-align: right; font-size: 9px; color: var(--text-dim); line-height: 1.8; }
+
+    /* Parameter summary strip */
+    .ap-params {
+      background: var(--bg-surface); border-bottom: 1px solid var(--border);
+      padding: 8px 26px; font-size: 10px; color: var(--text-dim);
+      letter-spacing: 0.04em; line-height: 1.8;
+    }
+    .ap-params span { color: var(--text-muted); margin-right: 14px; }
+    .ap-params strong { color: var(--amber-light); }
+
+    /* Cost breakdown */
+    .ap-breakdown { padding: 14px 26px 4px; }
+    .ap-row {
+      display: grid; grid-template-columns: 1fr auto auto;
+      align-items: baseline; gap: 8px;
+      padding: 8px 0; border-bottom: 1px dashed var(--border);
+    }
+    .ap-row:last-child { border-bottom: none; }
+    .ap-row-label  { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
+    .ap-row-detail { font-size: 10px; color: var(--text-dim); text-align: right; }
+    .ap-row-value  { font-family: var(--font-mono); font-size: 12px; color: var(--text); text-align: right; min-width: 88px; }
+
+    .ap-sep { height: 1px; background: var(--border-hi); margin: 10px 26px; }
+
+    .ap-total {
+      padding: 8px 26px 12px;
+      display: flex; align-items: baseline; justify-content: space-between;
+    }
+    .ap-total-label { font-family: var(--font-display); font-size: 15px; letter-spacing: 0.1em; color: var(--text-muted); }
+    .ap-total-value { font-family: var(--font-display); font-size: 36px; letter-spacing: 0.03em; color: var(--amber); text-shadow: 0 0 20px rgba(200,135,10,0.45); line-height:1; }
+
+    .ap-balance {
+      background: var(--bg-surface); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+      padding: 10px 26px;
+    }
+    .ap-bal-row { display: flex; justify-content: space-between; align-items: baseline; padding: 5px 0; }
+    .ap-bal-label { font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-muted); }
+    .ap-bal-value { font-family: var(--font-mono); font-size: 12px; color: var(--text); }
+    .ap-bal-value.ok  { color: var(--lime); }
+    .ap-bal-value.bad { color: var(--danger); }
+
+    .ap-warning {
+      margin: 12px 26px 0; padding: 10px 14px; font-size: 11px;
+      line-height: 1.55; background: rgba(200,74,46,0.09);
+      border: 1px solid var(--danger); border-left: 3px solid var(--danger);
+      color: var(--danger); display: none;
+    }
+    .ap-warning.visible { display: block; }
+
+    .ap-loading {
+      padding: 28px 26px; text-align: center;
+      font-size: 11px; color: var(--text-muted); letter-spacing: 0.1em;
+      display: none;
+    }
+    .ap-loading.visible { display: block; }
+    .ap-content { }
+    .ap-content.hidden { display: none; }
+
+    .ap-actions {
+      padding: 16px 26px; display: flex; gap: 10px; justify-content: flex-end;
+      background: var(--bg-surface); border-top: 1px solid var(--border);
+    }
+    .ap-btn {
+      font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em;
+      text-transform: uppercase; border: none; padding: 10px 24px; cursor: pointer;
+      transition: background 0.18s;
+    }
+    .ap-btn-cancel  { background: transparent; border: 1px solid var(--border-hi); color: var(--text-muted); }
+    .ap-btn-cancel:hover { background: var(--border); color: var(--text); }
+    .ap-btn-confirm { background: var(--lime); color: #000; font-weight: 700; }
+    .ap-btn-confirm:hover:not(:disabled) { background: #5ee07a; box-shadow: 0 0 16px rgba(75,196,106,0.4); }
+    .ap-btn-confirm:disabled { background: var(--border-hi); color: var(--text-dim); cursor: not-allowed; }
   </style>
 </head>
 <body>
@@ -1472,6 +1583,86 @@
         <button class="nj-btn nj-btn-back" id="nj-btn-back" onclick="njBack()" style="visibility:hidden">← Back</button>
         <span class="nj-step-indicator" id="nj-step-indicator">Step 1 of 3</span>
         <button class="nj-btn nj-btn-next" id="nj-btn-next" onclick="njNext()">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================
+       JOB APPROVAL MODAL
+  ====================================================== -->
+  <div id="approval-overlay" class="approval-overlay" onclick="if(event.target===this)closeApprovalModal()">
+    <div class="approval-card">
+      <div class="ap-inner">
+
+        <!-- Loading state -->
+        <div class="ap-loading visible" id="ap-loading">
+          <div style="font-family:var(--font-display);font-size:18px;letter-spacing:0.1em;color:var(--amber);margin-bottom:8px">LOADING…</div>
+          Calculating cost estimate from GCS…
+        </div>
+
+        <!-- Content (hidden until preflight loads) -->
+        <div class="ap-content hidden" id="ap-content">
+
+          <div class="ap-header">
+            <div>
+              <div class="ap-tag">APPROVAL REQUIRED</div>
+              <div class="ap-title" id="ap-job-name">Job Name</div>
+              <div class="ap-sub" id="ap-task-label">Palm Tree Counting</div>
+            </div>
+            <div class="ap-corner">
+              JOB APPROVAL<br>CONFIRMATION
+            </div>
+          </div>
+
+          <!-- Parameter summary -->
+          <div class="ap-params" id="ap-params-summary"></div>
+
+          <!-- Cost breakdown -->
+          <div class="ap-breakdown">
+            <div class="ap-row">
+              <span class="ap-row-label">Base Cost</span>
+              <span class="ap-row-detail"></span>
+              <span class="ap-row-value" id="ap-base-val">50 Tokens</span>
+            </div>
+            <div class="ap-row">
+              <span class="ap-row-label">Total Area</span>
+              <span class="ap-row-detail" id="ap-area-detail">—</span>
+              <span class="ap-row-value" id="ap-area-val">—</span>
+            </div>
+            <div class="ap-row">
+              <span class="ap-row-label">File Size</span>
+              <span class="ap-row-detail" id="ap-size-detail">—</span>
+              <span class="ap-row-value" id="ap-size-val">—</span>
+            </div>
+          </div>
+
+          <div class="ap-sep"></div>
+
+          <div class="ap-total">
+            <span class="ap-total-label">TOTAL COST</span>
+            <span class="ap-total-value" id="ap-total-val">—</span>
+          </div>
+
+          <div class="ap-balance">
+            <div class="ap-bal-row">
+              <span class="ap-bal-label">Your Balance</span>
+              <span class="ap-bal-value" id="ap-balance-cur">—</span>
+            </div>
+            <div class="ap-bal-row">
+              <span class="ap-bal-label">Balance After Processing</span>
+              <span class="ap-bal-value" id="ap-balance-after">—</span>
+            </div>
+          </div>
+
+          <div class="ap-warning" id="ap-warning"></div>
+
+        </div><!-- /ap-content -->
+
+        <div class="ap-actions">
+          <button class="ap-btn ap-btn-cancel" onclick="closeApprovalModal()">Cancel</button>
+          <button class="ap-btn ap-btn-confirm" id="ap-confirm-btn" disabled onclick="submitApproval()">Process Job</button>
+        </div>
+
       </div>
     </div>
   </div>
@@ -2822,11 +3013,7 @@
       });
     }
 
-    // ── Stub actions (wired in Steps 53-54) ───────────────────────
-    function openApprovalModal(jobId) {
-      // implemented in Step 53
-      alert(`Approval flow for job ${jobId} — coming in Step 53`);
-    }
+    // ── Stub actions (wired in Step 54) ───────────────────────────
     function downloadJobResult(jobId, taskType) {
       // implemented in Step 54
       alert(`Download for job ${jobId} — coming in Step 54`);
@@ -2834,6 +3021,140 @@
     function previewJobResult(jobId, taskType) {
       // implemented in Step 54
       alert(`Preview for job ${jobId} — coming in Step 54`);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  JOB APPROVAL MODAL
+    // ══════════════════════════════════════════════════════════════
+
+    let _approvalJobId = null;
+
+    function closeApprovalModal() {
+      document.getElementById('approval-overlay').classList.remove('open');
+      _approvalJobId = null;
+    }
+
+    function _fmtSize(mb) {
+      return mb >= 1024 ? `${(mb / 1024).toFixed(2)} GB` : `${mb.toFixed(1)} MB`;
+    }
+
+    function _buildParamSummary(taskType, params) {
+      if (!params || Object.keys(params).length === 0) return '—';
+      if (taskType === 'palm_counting') {
+        const parts = [];
+        if (params.conf_threshold != null) parts.push(`<span>Conf</span><strong>${parseFloat(params.conf_threshold).toFixed(2)}</strong>`);
+        if (params.nms_threshold  != null) parts.push(`<span>NMS</span><strong>${parseFloat(params.nms_threshold).toFixed(2)}</strong>`);
+        if (params.tile_width     != null) parts.push(`<span>Tile</span><strong>${params.tile_width}px</strong>`);
+        if (params.min_distance   != null) parts.push(`<span>MinDist</span><strong>${params.min_distance}m</strong>`);
+        return parts.join('');
+      } else {
+        const parts = [];
+        if (params.tile_size      != null) parts.push(`<span>Tile</span><strong>${params.tile_size}px</strong>`);
+        if (params.overlap        != null) parts.push(`<span>Overlap</span><strong>${params.overlap}px</strong>`);
+        if (params.min_noise_size != null) parts.push(`<span>Noise</span><strong>${params.min_noise_size}px</strong>`);
+        if (params.use_filter     != null) parts.push(`<span>Filter</span><strong>${params.use_filter ? 'On' : 'Off'}</strong>`);
+        return parts.join('');
+      }
+    }
+
+    async function openApprovalModal(jobId) {
+      _approvalJobId = jobId;
+
+      // Show overlay in loading state
+      const overlay    = document.getElementById('approval-overlay');
+      const loadingEl  = document.getElementById('ap-loading');
+      const contentEl  = document.getElementById('ap-content');
+      const confirmBtn = document.getElementById('ap-confirm-btn');
+      const warningEl  = document.getElementById('ap-warning');
+
+      loadingEl.classList.add('visible');
+      contentEl.classList.add('hidden');
+      confirmBtn.disabled = true;
+      warningEl.classList.remove('visible');
+      overlay.classList.add('open');
+
+      try {
+        const resp = await authFetch(`/api/jobs/${jobId}/preflight`);
+        if (!resp.ok) {
+          const msg = await parseErrorResponse(resp);
+          throw new Error(msg);
+        }
+        const d = await resp.json();
+
+        // Populate header
+        document.getElementById('ap-job-name').textContent   = d.job_name;
+        document.getElementById('ap-task-label').textContent =
+          d.task_type === 'palm_counting' ? '🌴 Palm Tree Counting' : '🗺 Land Cover Analysis';
+
+        // Parameter summary strip
+        document.getElementById('ap-params-summary').innerHTML =
+          _buildParamSummary(d.task_type, d.parameters);
+
+        // Cost breakdown rows
+        document.getElementById('ap-base-val').textContent    = `${d.base_cost.toLocaleString()} Tokens`;
+        document.getElementById('ap-area-detail').textContent = `${d.area_ha.toLocaleString(undefined,{maximumFractionDigits:1})} Ha`;
+        document.getElementById('ap-area-val').textContent    = `${d.area_cost.toLocaleString()} Tokens`;
+        document.getElementById('ap-size-detail').textContent = _fmtSize(d.file_size_mb);
+        document.getElementById('ap-size-val').textContent    = `${d.size_cost.toLocaleString()} Tokens`;
+        document.getElementById('ap-total-val').textContent   = `${d.token_cost.toLocaleString()} Tokens`;
+
+        // Balance rows
+        document.getElementById('ap-balance-cur').textContent    = `${d.token_balance.toLocaleString()} Tokens`;
+        const afterEl = document.getElementById('ap-balance-after');
+        afterEl.textContent = `${d.balance_after.toLocaleString()} Tokens`;
+        afterEl.className   = 'ap-bal-value ' + (d.balance_after >= 0 ? 'ok' : 'bad');
+
+        // Insufficient warning
+        if (!d.can_afford) {
+          warningEl.textContent = `Insufficient token balance. You need ${d.token_cost.toLocaleString()} tokens but only have ${d.token_balance.toLocaleString()}. Contact an admin to top up.`;
+          warningEl.classList.add('visible');
+          confirmBtn.disabled = true;
+        } else {
+          confirmBtn.disabled = false;
+        }
+
+        // Swap loading → content
+        loadingEl.classList.remove('visible');
+        contentEl.classList.remove('hidden');
+
+      } catch (err) {
+        loadingEl.innerHTML = `<div style="color:var(--danger);font-size:11px">⚠ ${escapeHtml(err.message)}</div>`;
+      }
+    }
+
+    async function submitApproval() {
+      if (!_approvalJobId) return;
+      const confirmBtn = document.getElementById('ap-confirm-btn');
+      const cancelBtn  = confirmBtn.parentElement.querySelector('.ap-btn-cancel');
+      confirmBtn.disabled = true;
+      cancelBtn.disabled  = true;
+      confirmBtn.textContent = 'Processing…';
+
+      try {
+        const resp = await authFetch(`/api/jobs/${_approvalJobId}/approve`, {
+          method: 'POST',
+        });
+        if (!resp.ok) throw new Error(await parseErrorResponse(resp));
+        const data = await resp.json();
+
+        // Update local user balance display
+        if (currentUser && data.new_balance != null) {
+          currentUser.token_balance = data.new_balance;
+          updateUserHeader();
+          updateTierInfo();
+        }
+
+        closeApprovalModal();
+        await loadJobs();
+
+      } catch (err) {
+        const warningEl = document.getElementById('ap-warning');
+        warningEl.textContent = '⚠ ' + err.message;
+        warningEl.classList.add('visible');
+        confirmBtn.disabled    = false;
+        cancelBtn.disabled     = false;
+        confirmBtn.textContent = 'Process Job';
+      }
     }
 
     // ══════════════════════════════════════════════════════════════
