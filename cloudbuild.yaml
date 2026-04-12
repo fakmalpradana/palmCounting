@@ -86,11 +86,16 @@ steps:
       - '--region=asia-southeast1'
       - '--platform=managed'
       - '--allow-unauthenticated'
-      - '--memory=2Gi'
+      # unet_swin (SwinTransformer) expands to ~2.3–2.4 GiB at runtime;
+      # 2Gi limit caused repeated OOM kills → 503 on land cover inference.
+      # 4Gi gives headroom for model weights + tiled tensor allocations.
+      - '--memory=4Gi'
       - '--cpu=2'
       - '--min-instances=0'
       - '--max-instances=5'
-      - '--timeout=300'
+      # Increased from 300s — large raster land cover inference can take
+      # several minutes on CPU; 300s was too tight for commercial-tier files.
+      - '--timeout=3600'
       - '--update-env-vars=PYTHONUNBUFFERED=1,FIRESTORE_PROJECT_ID=$PROJECT_ID,FRONTEND_URL=https://palm-counter-981519809891.asia-southeast1.run.app'
       - '--quiet'
 
