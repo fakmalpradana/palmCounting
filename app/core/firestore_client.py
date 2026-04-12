@@ -272,10 +272,13 @@ def get_jobs_for_user(user_email: str) -> list[dict]:
     docs = (
         db.collection("jobs")
         .where("user_email", "==", user_email)
-        .order_by("created_at", direction="DESCENDING")
+        # order_by("created_at") removed temporarily — composite index pending creation.
+        # Sorting in Python until index is ready.
         .stream()
     )
-    return [doc.to_dict() for doc in docs]
+    jobs = [doc.to_dict() for doc in docs]
+    jobs.sort(key=lambda x: x.get("created_at") or "", reverse=True)
+    return jobs
 
 
 def get_all_jobs() -> list[dict]:
