@@ -1,8 +1,9 @@
 # app/core/firestore_client.py
 from __future__ import annotations
 
-from datetime import date
-from typing import Optional
+import uuid
+from datetime import date, datetime, timezone
+from typing import Any, Literal, Optional
 
 from app.core.config import settings
 
@@ -219,3 +220,98 @@ def check_and_increment_daily_upload(google_uid: str) -> dict:
         return {"daily_upload_count": count + 1, "last_upload_date": today}
 
     return _txn(db.transaction(), ref)
+
+
+# ── Job Management ─────────────────────────────────────────────────────────────
+
+JobStatus = Literal["uploading", "approval", "processing", "done", "failed"]
+TaskType = Literal["palm_counting", "land_cover"]
+
+_DEV_JOBS: list[dict] = []
+
+
+def create_job(
+    user_email: str,
+    job_name: str,
+    task_type: TaskType,
+    parameters: dict[str, Any],
+    file_uri: str = "",
+) -> dict:
+    """Create a new job document in Firestore. Returns the full job dict."""
+    job_id = str(uuid.uuid4())
+    now = datetime.now(timezone.utc)
+    job: dict[str, Any] = {
+        "job_id":     job_id,
+        "user_email": user_email,
+        "job_name":   job_name or "Untitled Job",
+        "task_type":  task_type,
+        "parameters": parameters,
+        "status":     "uploading",
+        "file_uri":   file_uri,
+        "result_uri": "",
+        "token_cost": 0,
+        "created_at": now.isoformat(),
+    }
+    if settings.dev_mode:
+        _DEV_JOBS.append(job)
+        return job
+    db = get_db()
+    db.collection("jobs").document(job_id).set(job)
+    return job
+
+
+def get_jobs_for_user(user_email: str) -> list[dict]:
+    """Return all jobs belonging to *user_email*, newest first."""
+    if settings.dev_mode:
+        return sorted(
+            [j for j in _DEV_JOBS if j["user_email"] == user_email],
+            key=lambda j: j["created_at"],
+            reverse=True,
+        )
+    db = get_db()
+    docs = (
+        db.collection("jobs")
+        .where("user_email", "==", user_email)
+        .order_by("created_at", direction="DESCENDING")
+        .stream()
+    )
+    return [doc.to_dict() for doc in docs]
+
+
+def get_all_jobs() -> list[dict]:
+    """Return every job across all users (admin use), newest first."""
+    if settings.dev_mode:
+        return sorted(_DEV_JOBS, key=lambda j: j["created_at"], reverse=True)
+    db = get_db()
+    docs = (
+        db.collection("jobs")
+        .order_by("created_at", direction="DESCENDING")
+        .limit(200)
+        .stream()
+    )
+    return [doc.to_dict() for doc in docs]
+
+
+def get_job(job_id: str) -> Optional[dict]:
+    """Fetch a single job by ID."""
+    if settings.dev_mode:
+        return next((j for j in _DEV_JOBS if j["job_id"] == job_id), None)
+    db = get_db()
+    doc = db.collection("jobs").document(job_id).get()
+    return doc.to_dict() if doc.exists else None
+
+
+def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict]:
+    """Partially update a job document. Returns the updated job or None if not found."""
+    if settings.dev_mode:
+        job = next((j for j in _DEV_JOBS if j["job_id"] == job_id), None)
+        if job is None:
+            return None
+        job.update(updates)
+        return job
+    db = get_db()
+    ref = db.collection("jobs").document(job_id)
+    if not ref.get().exists:
+        return None
+    ref.update(updates)
+    return ref.get().to_dict()
