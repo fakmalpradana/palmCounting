@@ -1012,6 +1012,26 @@ def get_preview(file_id: str):
 
 
 # ---------------------------------------------------------------------------
+# Frontend configuration endpoint
+# ---------------------------------------------------------------------------
+
+@router.get("/config")
+def get_frontend_config():
+    """Return frontend-relevant configuration.
+
+    Public (no auth required) so the browser can fetch it before login to
+    know which service URLs to use for routing decisions.
+
+    ``gpu_worker_url`` is the fully-qualified URL of the GPU Cloud Run service.
+    When set, the frontend routes land cover and large commercial requests
+    directly to that service; when absent/null, all requests use this CPU service.
+    """
+    return JSONResponse({
+        "gpu_worker_url": settings.gpu_worker_url or None,
+    })
+
+
+# ---------------------------------------------------------------------------
 # Model management
 # ---------------------------------------------------------------------------
 

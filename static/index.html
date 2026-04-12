@@ -1215,6 +1215,14 @@
     let currentUser  = null;
     let currentTaskType = 'palm_counting';   // tracks active task for download URL
 
+    // ── Service routing ────────────────────────────────────────────────────
+    // gpuBaseUrl: full origin of the GPU Cloud Run service, or '' to use the
+    // current CPU service (relative URLs). Set by loadFrontendConfig().
+    // currentResultBase: origin that processed the last inference result —
+    // used to route preview/download requests to the right service.
+    let gpuBaseUrl       = '';
+    let currentResultBase = '';
+
     // ── Token Guide modal ──────────────────────────────────────────────────
     function showTokenGuide() {
       document.getElementById('token-guide-modal').classList.add('open');
@@ -1269,11 +1277,26 @@
       }
     }
 
+    // Fetch backend config (GPU service URL, etc.) and store for routing.
+    // Called once after auth — failures are silently swallowed so they never
+    // block login; routing falls back to CPU service in that case.
+    async function loadFrontendConfig() {
+      try {
+        const res = await fetch('/api/config');
+        if (res.ok) {
+          const cfg = await res.json();
+          // Trim trailing slash so we can safely prefix paths with `/api/...`
+          gpuBaseUrl = (cfg.gpu_worker_url || '').replace(/\/$/, '');
+        }
+      } catch (_) { /* non-fatal */ }
+    }
+
     function onAuthSuccess() {
       document.getElementById('user-header').style.display = 'flex';
       updateUserHeader();
       updateTierInfo();
       loadModels();
+      loadFrontendConfig();   // populate gpuBaseUrl for heavy-request routing
       showScreen('screen-upload');
     }
 
@@ -1589,15 +1612,20 @@
     }
 
     // Commercial path: if gcs_path already exists from preflight, skip re-upload.
+    // Heavy workloads route directly to the GPU service when configured.
     async function runCommercialInference(file, params, existingGcsPath = null) {
       let gcs_path = existingGcsPath;
 
       if (!gcs_path) {
-        // Small file: upload now (large files already uploaded during preflight)
+        // Small file: upload now (large files already uploaded during preflight).
+        // Signed-URL endpoint always lives on the CPU service (relative URL).
         gcs_path = await uploadToGcs(file, null);
       }
 
-      const submitRes = await authFetch('/api/inference/submit', {
+      // Route submit directly to GPU service for heavy compute.
+      // Falls back to CPU service (relative URL) if GPU is not configured.
+      const base = gpuBaseUrl;
+      const submitRes = await authFetch(`${base}/api/inference/submit`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ gcs_path, ...params }),
@@ -1606,7 +1634,8 @@
       return submitRes.json();
     }
 
-    // Land cover: direct POST for small files; GCS submit for large files.
+    // Land cover: ALL requests route to the GPU service (SwinUnet is GPU-heavy).
+    // Small files use direct multipart POST; large files use GCS-backed submit.
     async function runLandCoverInference(file, existingGcsPath = null) {
       const lcParams = {
         tile_size:      document.getElementById('lc-tile-size').value,
@@ -1615,10 +1644,14 @@
         use_filter:     document.getElementById('lc-filter').value,
       };
 
+      // Route to GPU service when configured; CPU service fallback otherwise.
+      const base = gpuBaseUrl;
+
       if (existingGcsPath || file.size > DIRECT_UPLOAD_MAX) {
-        // Large file path: use GCS-backed endpoint to bypass 32 MB limit
+        // Large file path: file already in GCS (or upload now).
+        // Signed-URL endpoint stays on CPU service; only the inference moves to GPU.
         const gcs_path = existingGcsPath || await uploadToGcs(file, null);
-        const submitRes = await authFetch('/api/inference/submit-land-cover', {
+        const submitRes = await authFetch(`${base}/api/inference/submit-land-cover`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ gcs_path, ...lcParams }),
@@ -1627,11 +1660,11 @@
         return submitRes.json();
       }
 
-      // Small file: direct POST
+      // Small file: direct multipart POST to GPU service.
       const formData = new FormData();
       formData.append('file', file);
       Object.entries(lcParams).forEach(([k, v]) => formData.append(k, v));
-      const res = await authFetch('/api/inference/land-cover', { method: 'POST', body: formData });
+      const res = await authFetch(`${base}/api/inference/land-cover`, { method: 'POST', body: formData });
       if (!res.ok) throw new Error(await parseErrorResponse(res));
       return res.json();
     }
@@ -1937,8 +1970,12 @@
           updateTierInfo();
         }
 
-        currentFileId   = data.file_id;
-        currentTaskType = data.task_type || 'palm_counting';
+        currentFileId     = data.file_id;
+        currentTaskType   = data.task_type || 'palm_counting';
+        // Record which service produced this result so preview/download
+        // requests are routed to the same instance (or its GCS fallback).
+        currentResultBase = (isLc || (currentUser && currentUser.token_balance > 0))
+          ? gpuBaseUrl : '';
         stopLoadingAnimation(data.geojson.metadata.count);
         await new Promise(r => setTimeout(r, 600));
         await buildMap(data, displayModel);
@@ -1962,9 +1999,10 @@
     // ----------------------------------------------------------
     document.getElementById('btn-download').addEventListener('click', () => {
       if (!currentFileId) return;
+      const base = currentResultBase;
       const url = currentTaskType === 'land_cover'
-        ? `/api/download/land-cover/${currentFileId}`
-        : `/api/download/${currentFileId}`;
+        ? `${base}/api/download/land-cover/${currentFileId}`
+        : `${base}/api/download/${currentFileId}`;
       window.location.href = url;
     });
 
@@ -2046,6 +2084,10 @@
       }).addTo(leafletMap);
 
       // ── Raster overlay ──
+      // Use currentResultBase so preview requests go to the same service
+      // (CPU or GPU) that holds the result files.  Land cover TIFs also
+      // have a GCS fallback (Step 46) so either service can serve them.
+      const resultBase = currentResultBase;
       const rb = meta.raster_bounds;
       if (rb) {
         if (isLc) {
@@ -2056,20 +2098,20 @@
           const inputPane = leafletMap.createPane('inputRasterPane');
           inputPane.style.zIndex = 290;
           L.imageOverlay(
-            `/api/preview/${file_id}`,
+            `${resultBase}/api/preview/${file_id}`,
             [[rb[1], rb[0]], [rb[3], rb[2]]],
             { opacity: 1.0, pane: 'inputRasterPane' }
           ).addTo(leafletMap);
           // Classified palette overlay on top (toggled by the raster toggle)
           rasterLayer = L.imageOverlay(
-            `/api/preview/land-cover/${file_id}`,
+            `${resultBase}/api/preview/land-cover/${file_id}`,
             [[rb[1], rb[0]], [rb[3], rb[2]]],
             { opacity: 0.75, pane: 'rasterPane' }
           ).addTo(leafletMap);
         } else {
           // Palm counting: single RGB preview overlay
           rasterLayer = L.imageOverlay(
-            `/api/preview/${file_id}`,
+            `${resultBase}/api/preview/${file_id}`,
             [[rb[1], rb[0]], [rb[3], rb[2]]],
             { opacity: 0.85, pane: 'rasterPane' }
           ).addTo(leafletMap);

@@ -80,7 +80,17 @@ steps:
 
   # ── Step 4: Deploy GPU Cloud Run service ─────────────────
   # Service: palm-counter-gpu (separate from palm-counter CPU service)
-  # Access: no-allow-unauthenticated (called internally by CPU service only)
+  #
+  # Access model (changed from no-allow-unauthenticated):
+  #   --allow-unauthenticated lets the browser call the GPU service directly
+  #   for land cover and large commercial requests.  Security is enforced at
+  #   the application layer — every inference endpoint requires a valid JWT
+  #   (Bearer token issued by the CPU service).  Both services MUST share the
+  #   same JWT_SECRET value; set it manually:
+  #     gcloud run services update palm-counter-gpu \
+  #       --update-env-vars JWT_SECRET=<same value as CPU service> \
+  #       --region=asia-southeast1
+  #
   # GPU:    NVIDIA L4 · 1 GPU · CUDA 12.4 · gen2 execution environment
   # Spec:   4 vCPU / 16 GiB RAM (minimum required for L4 GPU on Cloud Run)
   # Scale:  0–2 instances, concurrency=1 (hard cap = verified L4 GPU quota)
@@ -95,7 +105,8 @@ steps:
       - '--image=asia-southeast1-docker.pkg.dev/$PROJECT_ID/palm-counting-repo/palm-counter-gpu:$COMMIT_SHA'
       - '--region=asia-southeast1'
       - '--platform=managed'
-      - '--no-allow-unauthenticated'
+      # Allow unauthenticated IAM access — JWT middleware protects every endpoint.
+      - '--allow-unauthenticated'
       - '--service-account=palm-counter-gpu@$PROJECT_ID.iam.gserviceaccount.com'
       # ── GPU flags ────────────────────────────────────────
       - '--execution-environment=gen2'
@@ -119,7 +130,12 @@ steps:
       # Large raster inference can take several minutes
       - '--timeout=3600'
       # ── Environment ──────────────────────────────────────
-      - '--update-env-vars=PYTHONUNBUFFERED=1,FIRESTORE_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=palmcounting-uploads'
+      # FRONTEND_URL: the CPU service origin — CORS allows cross-origin requests
+      # from the browser (which is served by the CPU service).
+      # JWT_SECRET: must be set separately (see note above).
+      # GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET: only needed if GPU service must
+      # issue its own OAuth tokens; omit if all auth flows go through CPU service.
+      - '--update-env-vars=PYTHONUNBUFFERED=1,FIRESTORE_PROJECT_ID=$PROJECT_ID,GCS_BUCKET_NAME=palmcounting-uploads,FRONTEND_URL=https://palm-counter-981519809891.asia-southeast1.run.app'
       - '--quiet'
 
 # ── Image output declaration ─────────────────────────────────
