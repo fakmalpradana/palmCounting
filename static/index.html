@@ -2048,16 +2048,32 @@
       // ── Raster overlay ──
       const rb = meta.raster_bounds;
       if (rb) {
-        // Land cover: serve the palette-coloured classified PNG;
-        // palm counting: serve the standard 2–98 percentile stretch preview.
-        const previewUrl = isLc
-          ? `/api/preview/land-cover/${file_id}`
-          : `/api/preview/${file_id}`;
-        rasterLayer = L.imageOverlay(
-          previewUrl,
-          [[rb[1], rb[0]], [rb[3], rb[2]]],
-          { opacity: isLc ? 0.75 : 0.85, pane: 'rasterPane' }
-        ).addTo(leafletMap);
+        if (isLc) {
+          // Land cover: keep the original input raster visible as a base layer,
+          // then overlay the palette-coloured classified result on top.
+          // A separate pane (z=290) sits below rasterPane (z=300) so the input
+          // is never cleared when the result layer is added.
+          const inputPane = leafletMap.createPane('inputRasterPane');
+          inputPane.style.zIndex = 290;
+          L.imageOverlay(
+            `/api/preview/${file_id}`,
+            [[rb[1], rb[0]], [rb[3], rb[2]]],
+            { opacity: 1.0, pane: 'inputRasterPane' }
+          ).addTo(leafletMap);
+          // Classified palette overlay on top (toggled by the raster toggle)
+          rasterLayer = L.imageOverlay(
+            `/api/preview/land-cover/${file_id}`,
+            [[rb[1], rb[0]], [rb[3], rb[2]]],
+            { opacity: 0.75, pane: 'rasterPane' }
+          ).addTo(leafletMap);
+        } else {
+          // Palm counting: single RGB preview overlay
+          rasterLayer = L.imageOverlay(
+            `/api/preview/${file_id}`,
+            [[rb[1], rb[0]], [rb[3], rb[2]]],
+            { opacity: 0.85, pane: 'rasterPane' }
+          ).addTo(leafletMap);
+        }
       }
 
       // ── Vector layer ──

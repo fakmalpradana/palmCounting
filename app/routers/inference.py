@@ -561,6 +561,9 @@ async def submit_gcs_land_cover(
     geojson["metadata"]["duration_seconds"] = duration
     result_geojson.write_text(json.dumps(geojson, indent=2))
 
+    # Upload classified TIF to GCS for cross-instance preview serving
+    _upload_lc_tif_to_gcs(file_id, result_tif)
+
     # Deduct tokens atomically
     try:
         await asyncio_to_thread_deduct_tokens(current_user["sub"], cost)
@@ -808,6 +811,10 @@ async def infer_land_cover(
 
     result_geojson.write_text(json.dumps(geojson, indent=2))
 
+    # Upload classified TIF to GCS so any Cloud Run instance can serve the
+    # preview (local disk is ephemeral; preview GET may hit a different instance).
+    _upload_lc_tif_to_gcs(file_id, result_tif)
+
     return JSONResponse({
         "file_id":          file_id,
         "task_type":        "land_cover",
@@ -815,6 +822,53 @@ async def infer_land_cover(
         "tokens_deducted":  tokens_deducted,
         "geojson":          geojson,
     })
+
+
+# ---------------------------------------------------------------------------
+# GCS helper — persist classified TIF for cross-instance preview serving
+# ---------------------------------------------------------------------------
+
+def _upload_lc_tif_to_gcs(file_id: str, local_path: Path) -> None:
+    """Upload the classified land-cover GeoTIFF to GCS.
+
+    Stored at ``results/{file_id}_lc.tif`` in the application bucket.
+    Failures are logged but swallowed so they never break the inference
+    response that the user is already waiting for.
+    """
+    bucket_name = settings.gcs_bucket_name
+    if not bucket_name or not local_path.exists():
+        return
+    try:
+        client = gcs.Client(project=settings.firestore_project_id)
+        blob   = client.bucket(bucket_name).blob(f"results/{file_id}_lc.tif")
+        blob.upload_from_filename(str(local_path), content_type="image/tiff")
+        log.info("Land-cover TIF uploaded to GCS: gs://%s/results/%s_lc.tif",
+                 bucket_name, file_id)
+    except Exception:
+        log.exception("Failed to upload land-cover TIF to GCS (preview may 404 on other instances)")
+
+
+def _load_lc_tif_from_gcs(file_id: str, local_path: Path) -> bool:
+    """Download the classified TIF from GCS into *local_path*.
+
+    Returns True on success, False if the object does not exist or download
+    fails (e.g. bucket not configured).
+    """
+    bucket_name = settings.gcs_bucket_name
+    if not bucket_name:
+        return False
+    try:
+        client = gcs.Client(project=settings.firestore_project_id)
+        blob   = client.bucket(bucket_name).blob(f"results/{file_id}_lc.tif")
+        if not blob.exists():
+            return False
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        blob.download_to_filename(str(local_path))
+        log.info("Land-cover TIF fetched from GCS: %s", local_path)
+        return True
+    except Exception:
+        log.exception("Failed to download land-cover TIF from GCS")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -826,11 +880,16 @@ def get_land_cover_preview(file_id: str):
     """
     Return a palette-coloured PNG of the classified raster stored at
     results/{file_id}_lc.tif, with WGS84 bounds in response headers.
+
+    Falls back to GCS if the file is not present on this Cloud Run instance
+    (ephemeral local storage is instance-scoped).
     """
     _validate_file_id(file_id)
     path = RESULTS_DIR / f"{file_id}_lc.tif"
     if not path.exists():
-        raise HTTPException(404, "Land cover result not found. Run inference first.")
+        # Try to fetch from GCS — inference may have run on a different instance
+        if not _load_lc_tif_from_gcs(file_id, path):
+            raise HTTPException(404, "Land cover result not found. Run inference first.")
 
     with rasterio.open(path) as src:
         bounds_wgs84 = transform_bounds(src.crs, "EPSG:4326", *src.bounds)
