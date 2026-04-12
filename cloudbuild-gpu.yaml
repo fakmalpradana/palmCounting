@@ -81,9 +81,9 @@ steps:
   # ── Step 4: Deploy GPU Cloud Run service ─────────────────
   # Service: palm-counter-gpu (separate from palm-counter CPU service)
   # Access: no-allow-unauthenticated (called internally by CPU service only)
-  # GPU:    NVIDIA L4 · 1 GPU · CUDA 12.2 · gen2 execution environment
+  # GPU:    NVIDIA L4 · 1 GPU · CUDA 12.4 · gen2 execution environment
   # Spec:   4 vCPU / 16 GiB RAM (minimum required for L4 GPU on Cloud Run)
-  # Scale:  0–3 instances, concurrency=1 (GPU memory cannot be shared)
+  # Scale:  0–2 instances, concurrency=1 (hard cap = verified L4 GPU quota)
   - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
     id: 'cloud-run-deploy-gpu'
     waitFor: ['docker-push']
@@ -101,6 +101,8 @@ steps:
       - '--execution-environment=gen2'
       - '--gpu=1'
       - '--gpu-type=nvidia-l4'
+      # Disable zonal redundancy — quota is region-wide, not per-zone
+      - '--no-gpu-zonal-redundancy'
       # ── Resource spec (L4 minimum: 4 vCPU / 16 GiB) ─────
       - '--cpu=4'
       - '--memory=16Gi'
@@ -108,7 +110,10 @@ steps:
       - '--no-cpu-throttling'
       # ── Scaling ──────────────────────────────────────────
       - '--min-instances=0'
-      - '--max-instances=3'
+      # Hard cap at 2 — matches verified L4 GPU quota for asia-southeast1.
+      # Exceeding this causes Cloud Run to fail new instances with quota errors.
+      - '--max-instances=2'
+      # Each instance processes one request at a time — VRAM is not shareable.
       - '--concurrency=1'
       # ── Timeouts ─────────────────────────────────────────
       # Large raster inference can take several minutes
