@@ -64,3 +64,17 @@ async def update_role(
         status = 404 if "not found" in str(e).lower() else 400
         raise HTTPException(status, str(e))
     return {"uid": uid, "role": body.role}
+
+
+@router.get("/stats")
+async def admin_stats(admin=Depends(require_role("admin", "superadmin"))):
+    """Return global KPI metrics: total users, jobs, and tokens in circulation."""
+    stats = await asyncio.to_thread(firestore_client.get_admin_stats)
+    return stats
+
+
+@router.get("/activities")
+async def admin_activities(admin=Depends(require_role("admin", "superadmin"))):
+    """Return the 200 most recent jobs across all users as an activity feed."""
+    jobs = await asyncio.to_thread(firestore_client.get_all_jobs)
+    return {"activities": jobs}

@@ -315,3 +315,23 @@ def update_job(job_id: str, updates: dict[str, Any]) -> Optional[dict]:
         return None
     ref.update(updates)
     return ref.get().to_dict()
+
+
+def get_admin_stats() -> dict:
+    """Return global KPI counts for the admin dashboard."""
+    if settings.dev_mode:
+        total_tokens = sum(j.get("token_cost", 0) for j in _DEV_JOBS)
+        return {
+            "total_users":   1,
+            "total_jobs":    len(_DEV_JOBS),
+            "total_tokens":  total_tokens,
+        }
+    db = get_db()
+    users = list(db.collection("users").stream())
+    jobs  = list(db.collection("jobs").stream())
+    total_tokens = sum(u.to_dict().get("token_balance", 0) for u in users)
+    return {
+        "total_users":  len(users),
+        "total_jobs":   len(jobs),
+        "total_tokens": total_tokens,
+    }
