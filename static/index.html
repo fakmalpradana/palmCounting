@@ -793,6 +793,293 @@
     .lc-class-swatch { width: 10px; height: 10px; flex-shrink: 0; border: 1px solid rgba(255,255,255,0.15); }
     .lc-class-name { font-size: 10px; color: var(--text); letter-spacing: 0.04em; flex: 1; }
     .lc-class-area { font-size: 9px; color: var(--text-muted); white-space: nowrap; }
+
+    /* ============================================================
+       JOB DASHBOARD SCREEN
+    ============================================================ */
+    #screen-dashboard {
+      background: var(--bg-base);
+      align-items: stretch;
+      justify-content: flex-start;
+      overflow-y: auto;
+      z-index: 5;
+      top: 46px; bottom: 22px; left: 0; right: 0;
+    }
+    #screen-dashboard::before, #screen-dashboard::after { display: none; }
+
+    .dashboard-inner {
+      padding: 36px 44px 60px;
+      max-width: 1280px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    .dash-header {
+      display: flex;
+      align-items: flex-end;
+      justify-content: space-between;
+      margin-bottom: 30px;
+      padding-bottom: 18px;
+      border-bottom: 1px solid var(--border);
+      gap: 16px;
+    }
+    .dash-title {
+      font-family: var(--font-display);
+      font-size: 32px;
+      letter-spacing: 0.1em;
+      color: var(--text);
+      line-height: 1;
+    }
+    .dash-title span { color: var(--amber); }
+    .dash-subtitle {
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      margin-top: 6px;
+    }
+    .btn-new-job {
+      background: var(--amber);
+      color: #000;
+      font-family: var(--font-display);
+      font-size: 17px;
+      letter-spacing: 0.08em;
+      border: none;
+      padding: 11px 28px;
+      cursor: pointer;
+      transition: background 0.2s, transform 0.1s;
+      white-space: nowrap;
+      flex-shrink: 0;
+    }
+    .btn-new-job:hover { background: var(--amber-light); }
+    .btn-new-job:active { transform: scale(0.98); }
+
+    /* Jobs table */
+    .jobs-table-wrap { overflow-x: auto; }
+    .jobs-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12px;
+    }
+    .jobs-table th {
+      font-size: 9px;
+      letter-spacing: 0.2em;
+      text-transform: uppercase;
+      color: var(--text-dim);
+      padding: 10px 16px;
+      text-align: left;
+      border-bottom: 1px solid var(--border);
+      white-space: nowrap;
+      background: var(--bg-surface);
+    }
+    .jobs-table td {
+      padding: 15px 16px;
+      border-bottom: 1px solid var(--border);
+      vertical-align: middle;
+    }
+    .jobs-table tr:hover td { background: rgba(255,255,255,0.016); }
+
+    .job-id-cell {
+      font-size: 10px;
+      color: var(--text-dim);
+      font-family: var(--font-mono);
+      letter-spacing: 0.04em;
+    }
+    .job-name-wrap { display: flex; align-items: center; gap: 6px; }
+    .job-name-text { color: var(--text); font-weight: 500; }
+    .btn-rename {
+      background: none; border: none; color: var(--text-dim);
+      cursor: pointer; padding: 2px 4px; font-size: 11px;
+      opacity: 0.5; transition: opacity 0.2s, color 0.2s;
+    }
+    .btn-rename:hover { opacity: 1; color: var(--amber); }
+    .job-name-input {
+      background: var(--bg-surface);
+      border: 1px solid var(--amber);
+      color: var(--text);
+      font-family: var(--font-mono);
+      font-size: 12px;
+      padding: 3px 8px;
+      outline: none;
+      width: 180px;
+    }
+
+    .task-chip {
+      font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+      padding: 3px 9px; border: 1px solid var(--border); color: var(--text-muted);
+      display: inline-block;
+    }
+    .task-chip.palm { border-color: rgba(200,135,10,0.5); color: var(--amber); background: var(--amber-glow); }
+    .task-chip.lc   { border-color: rgba(75,196,106,0.4); color: var(--lime); background: var(--lime-dim); }
+
+    .status-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase;
+      padding: 4px 10px; font-weight: 600; white-space: nowrap;
+    }
+    .status-badge::before { content: '●'; font-size: 8px; }
+    .status-uploading  { background: rgba(74,144,217,0.1); color: #4a90d9; border: 1px solid rgba(74,144,217,0.3); }
+    .status-uploading::before { animation: pulse-dot 1.2s ease-in-out infinite; }
+    .status-approval   { background: var(--amber-glow); color: var(--amber); border: 1px solid rgba(200,135,10,0.4); }
+    .status-processing { background: var(--lime-dim); color: var(--lime); border: 1px solid rgba(75,196,106,0.3); }
+    .status-processing::before { animation: pulse-dot 1s ease-in-out infinite; }
+    .status-done       { background: rgba(46,168,96,0.1); color: #2ea860; border: 1px solid rgba(46,168,96,0.4); }
+    .status-failed     { background: rgba(200,74,46,0.1); color: var(--danger); border: 1px solid rgba(200,74,46,0.3); }
+    @keyframes pulse-dot { 0%,100% { opacity:1; } 50% { opacity:0.25; } }
+
+    .created-cell { font-size: 10px; color: var(--text-dim); white-space: nowrap; }
+
+    .job-action-btn {
+      font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.1em;
+      text-transform: uppercase; padding: 5px 12px;
+      border: 1px solid var(--border-hi); background: transparent;
+      color: var(--text-muted); cursor: pointer; transition: all 0.18s; white-space: nowrap;
+    }
+    .job-action-btn:hover { border-color: var(--amber); color: var(--amber); }
+    .job-action-btn.review  { border-color: rgba(200,135,10,0.6); color: var(--amber); }
+    .job-action-btn.review:hover  { background: var(--amber-glow); }
+    .job-action-btn.dl { border-color: rgba(75,196,106,0.5); color: var(--lime); }
+    .job-action-btn.dl:hover { background: var(--lime-dim); }
+    .job-action-btn.preview { border-color: rgba(74,144,217,0.4); color: #4a90d9; }
+    .job-action-btn.preview:hover { background: rgba(74,144,217,0.1); }
+    .job-actions-wrap { display: flex; gap: 6px; flex-wrap: wrap; }
+
+    .jobs-empty {
+      text-align: center; padding: 64px 20px;
+      color: var(--text-dim);
+    }
+    .jobs-empty-icon { font-size: 38px; margin-bottom: 12px; opacity: 0.5; }
+    .jobs-empty-text { font-size: 12px; letter-spacing: 0.1em; color: var(--text-muted); }
+
+    /* ============================================================
+       NEW JOB MODAL
+    ============================================================ */
+    .new-job-overlay {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,0.88); backdrop-filter: blur(4px);
+      z-index: 9000; align-items: center; justify-content: center;
+    }
+    .new-job-overlay.open { display: flex; }
+
+    .new-job-modal {
+      background: var(--bg-card); border: 1px solid var(--border-hi);
+      border-top: 3px solid var(--amber);
+      width: min(600px, 96vw); max-height: 90vh; overflow-y: auto;
+      position: relative;
+      animation: nj-rise 0.26s cubic-bezier(0.22,1,0.36,1) both;
+    }
+    @keyframes nj-rise {
+      from { opacity:0; transform: translateY(16px); }
+      to   { opacity:1; transform: translateY(0); }
+    }
+
+    .nj-header {
+      padding: 20px 28px 16px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: flex-start; justify-content: space-between;
+    }
+    .nj-title { font-family: var(--font-display); font-size: 22px; letter-spacing: 0.08em; color: var(--text); line-height:1; }
+    .nj-subtitle { font-size: 9px; letter-spacing: 0.16em; color: var(--text-dim); text-transform: uppercase; margin-top: 5px; }
+    .nj-btn-close { background: none; border: none; color: var(--text-dim); font-size: 18px; cursor: pointer; padding: 2px 6px; transition: color 0.2s; line-height:1; }
+    .nj-btn-close:hover { color: var(--text); }
+
+    .nj-steps {
+      display: flex; padding: 0 28px;
+      background: var(--bg-surface); border-bottom: 1px solid var(--border);
+    }
+    .nj-step {
+      flex: 1; padding: 10px 0; text-align: center;
+      font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      color: var(--text-dim); border-bottom: 2px solid transparent;
+      transition: all 0.2s; cursor: default;
+    }
+    .nj-step.active { color: var(--amber); border-bottom-color: var(--amber); }
+    .nj-step.done   { color: var(--text-muted); }
+
+    .nj-body { padding: 26px 28px; }
+    .nj-pane { display: none; }
+    .nj-pane.active { display: block; }
+
+    /* Task cards */
+    .task-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 4px; }
+    .task-card {
+      border: 1.5px solid var(--border); padding: 22px 16px;
+      cursor: pointer; transition: all 0.2s; text-align: center; user-select: none;
+    }
+    .task-card:hover { border-color: var(--border-hi); background: rgba(255,255,255,0.02); }
+    .task-card.selected { border-color: var(--amber); background: var(--amber-glow); }
+    .task-card-icon { font-size: 32px; margin-bottom: 10px; display: block; }
+    .task-card-name { font-family: var(--font-display); font-size: 17px; letter-spacing: 0.06em; color: var(--text); margin-bottom: 5px; }
+    .task-card-desc { font-size: 10px; color: var(--text-muted); line-height: 1.6; }
+
+    .nj-section-title {
+      font-size: 9px; letter-spacing: 0.2em; text-transform: uppercase;
+      color: var(--text-dim); margin-bottom: 16px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .nj-section-title::after { content: ''; flex:1; height: 1px; background: var(--border); }
+
+    .nj-param-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .nj-param-item label {
+      display: block; font-size: 9px; letter-spacing: 0.16em;
+      text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px;
+    }
+    .nj-param-item input[type=range] { width: 100%; accent-color: var(--amber); cursor: pointer; }
+    .nj-param-item .param-val { display: block; font-size: 11px; color: var(--amber-light); margin-top: 3px; }
+    .nj-input {
+      background: var(--bg-surface); border: 1px solid var(--border);
+      color: var(--text); font-family: var(--font-mono); font-size: 12px;
+      padding: 8px 10px; width: 100%; outline: none; transition: border-color 0.2s;
+    }
+    .nj-input:focus { border-color: var(--amber); }
+    select.nj-input {
+      appearance: none; cursor: pointer;
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%235d7c66'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 10px center;
+    }
+
+    .nj-job-name-row { margin-bottom: 22px; }
+    .nj-job-name-row label {
+      display: block; font-size: 9px; letter-spacing: 0.16em;
+      text-transform: uppercase; color: var(--text-dim); margin-bottom: 6px;
+    }
+
+    .nj-dropzone {
+      border: 1.5px dashed var(--border-hi); padding: 32px 20px;
+      text-align: center; cursor: pointer;
+      transition: border-color 0.2s, background 0.2s;
+      position: relative; margin-bottom: 14px;
+    }
+    .nj-dropzone:hover, .nj-dropzone.drag-over { border-color: var(--amber); background: var(--amber-glow); }
+    .nj-dropzone input { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+    .nj-drop-icon { font-size: 28px; margin-bottom: 8px; display: block; }
+    .nj-drop-main { font-size: 13px; color: var(--text); margin-bottom: 3px; font-weight: 500; }
+    .nj-drop-sub  { font-size: 10px; color: var(--text-muted); }
+    .nj-drop-filename { margin-top: 8px; font-size: 11px; color: var(--amber-light); display: none; }
+
+    .nj-upload-progress { margin-top: 14px; display: none; }
+    .nj-progress-label {
+      display: flex; justify-content: space-between;
+      font-size: 10px; color: var(--text-muted); letter-spacing: 0.08em; margin-bottom: 6px;
+    }
+    .nj-progress-track { height: 3px; background: var(--border); position: relative; overflow: hidden; }
+    .nj-progress-fill  { height: 100%; background: var(--amber); width: 0%; transition: width 0.25s; }
+
+    .nj-footer {
+      padding: 16px 28px; border-top: 1px solid var(--border);
+      display: flex; justify-content: space-between; align-items: center;
+      background: var(--bg-surface); flex-shrink: 0;
+    }
+    .nj-btn {
+      font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.12em;
+      text-transform: uppercase; padding: 10px 24px; border: none; cursor: pointer;
+      transition: background 0.18s, box-shadow 0.18s;
+    }
+    .nj-btn-back { background: transparent; border: 1px solid var(--border-hi); color: var(--text-muted); }
+    .nj-btn-back:hover { background: var(--border); color: var(--text); }
+    .nj-btn-next { background: var(--amber); color: #000; font-weight: 600; }
+    .nj-btn-next:hover:not(:disabled) { background: var(--amber-light); box-shadow: 0 0 16px var(--amber-glow); }
+    .nj-btn-next:disabled { background: var(--border-hi); color: var(--text-dim); cursor: not-allowed; }
+    .nj-step-indicator { font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; }
   </style>
 </head>
 <body>
@@ -1016,6 +1303,176 @@
     <div class="lc-legend" id="lc-legend">
       <div class="lc-legend-title">Land Cover Classes</div>
       <div id="lc-legend-items"></div>
+    </div>
+  </div>
+
+  <!-- ======================================================
+       SCREEN — JOB DASHBOARD
+  ====================================================== -->
+  <div id="screen-dashboard" class="screen">
+    <div class="dashboard-inner">
+      <div class="dash-header">
+        <div>
+          <div class="dash-title">JOB <span>DASHBOARD</span></div>
+          <div class="dash-subtitle">Async Inference Queue · All Tasks</div>
+        </div>
+        <button class="btn-new-job" onclick="openNewJobModal()">＋ NEW JOB</button>
+      </div>
+
+      <div class="jobs-table-wrap">
+        <table class="jobs-table">
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Name</th>
+              <th>Task</th>
+              <th>Status</th>
+              <th>Tokens</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-tbody">
+            <tr><td colspan="7">
+              <div class="jobs-empty">
+                <div class="jobs-empty-icon">📋</div>
+                <div class="jobs-empty-text">Loading jobs…</div>
+              </div>
+            </td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======================================================
+       NEW JOB MODAL
+  ====================================================== -->
+  <div id="new-job-overlay" class="new-job-overlay" onclick="if(event.target===this)closeNewJobModal()">
+    <div class="new-job-modal">
+
+      <div class="nj-header">
+        <div>
+          <div class="nj-title">CREATE NEW JOB</div>
+          <div class="nj-subtitle">Configure and submit an inference task</div>
+        </div>
+        <button class="nj-btn-close" onclick="closeNewJobModal()">✕</button>
+      </div>
+
+      <!-- Step tabs -->
+      <div class="nj-steps">
+        <div class="nj-step active" id="nj-step-1">01 · Task</div>
+        <div class="nj-step" id="nj-step-2">02 · Parameters</div>
+        <div class="nj-step" id="nj-step-3">03 · Upload</div>
+      </div>
+
+      <div class="nj-body">
+
+        <!-- ── Step 1: Task Selection ── -->
+        <div class="nj-pane active" id="nj-pane-1">
+          <div class="nj-section-title">Select AI Task</div>
+          <div class="task-cards">
+            <div class="task-card selected" id="tc-palm" onclick="njSelectTask('palm_counting')">
+              <span class="task-card-icon">🌴</span>
+              <div class="task-card-name">PALM COUNTING</div>
+              <div class="task-card-desc">YOLO ONNX object detection<br/>GeoTIFF → GeoJSON points</div>
+            </div>
+            <div class="task-card" id="tc-lc" onclick="njSelectTask('land_cover')">
+              <span class="task-card-icon">🗺</span>
+              <div class="task-card-name">LAND COVER</div>
+              <div class="task-card-desc">SwinUnet segmentation<br/>GeoTIFF → GeoJSON polygons</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Step 2: Parameters ── -->
+        <div class="nj-pane" id="nj-pane-2">
+          <!-- Palm params -->
+          <div id="nj-params-palm">
+            <div class="nj-section-title">Palm Counting Parameters</div>
+            <div class="nj-param-grid">
+              <div class="nj-param-item">
+                <label>Confidence Threshold</label>
+                <input type="range" id="nj-conf" min="0.05" max="0.95" step="0.05" value="0.25"
+                  oninput="document.getElementById('nj-conf-val').textContent=parseFloat(this.value).toFixed(2)" />
+                <span class="param-val" id="nj-conf-val">0.25</span>
+              </div>
+              <div class="nj-param-item">
+                <label>NMS Threshold</label>
+                <input type="range" id="nj-nms" min="0.05" max="0.95" step="0.05" value="0.40"
+                  oninput="document.getElementById('nj-nms-val').textContent=parseFloat(this.value).toFixed(2)" />
+                <span class="param-val" id="nj-nms-val">0.40</span>
+              </div>
+              <div class="nj-param-item">
+                <label>Min Distance (m)</label>
+                <input type="number" id="nj-min-dist" class="nj-input" value="1.0" min="0.1" max="50" step="0.1" />
+              </div>
+              <div class="nj-param-item">
+                <label>Tile Size (px)</label>
+                <input type="number" id="nj-tile-size" class="nj-input" value="640" min="128" max="1024" step="32" />
+              </div>
+            </div>
+          </div>
+          <!-- Land cover params -->
+          <div id="nj-params-lc" style="display:none">
+            <div class="nj-section-title">Land Cover Parameters</div>
+            <div class="nj-param-grid">
+              <div class="nj-param-item">
+                <label>Tile Size (px)</label>
+                <input type="number" id="nj-lc-tile-size" class="nj-input" value="512" min="256" max="1024" step="64" />
+              </div>
+              <div class="nj-param-item">
+                <label>Overlap (px)</label>
+                <input type="number" id="nj-lc-overlap" class="nj-input" value="128" min="64" max="256" step="32" />
+              </div>
+              <div class="nj-param-item">
+                <label>Min Noise (px)</label>
+                <input type="number" id="nj-lc-noise" class="nj-input" value="250" min="50" max="1000" step="50" />
+              </div>
+              <div class="nj-param-item">
+                <label>Noise Filter</label>
+                <select id="nj-lc-filter" class="nj-input">
+                  <option value="true">Enabled</option>
+                  <option value="false">Disabled</option>
+                </select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Step 3: Upload ── -->
+        <div class="nj-pane" id="nj-pane-3">
+          <div class="nj-job-name-row">
+            <label>Job Name</label>
+            <input type="text" id="nj-job-name" class="nj-input" placeholder="Untitled Job" maxlength="128" />
+          </div>
+          <div class="nj-section-title">Upload GeoTIFF</div>
+          <div class="nj-dropzone" id="nj-dropzone">
+            <input type="file" id="nj-file-input" accept=".tif,.tiff" />
+            <span class="nj-drop-icon">📡</span>
+            <div class="nj-drop-main">Drop your GeoTIFF here</div>
+            <div class="nj-drop-sub">or click to browse &nbsp;·&nbsp; .tif / .tiff</div>
+            <div class="nj-drop-filename" id="nj-drop-filename"></div>
+          </div>
+          <div class="nj-upload-progress" id="nj-upload-progress">
+            <div class="nj-progress-label">
+              <span id="nj-upload-status">Uploading…</span>
+              <span id="nj-upload-pct">0%</span>
+            </div>
+            <div class="nj-progress-track">
+              <div class="nj-progress-fill" id="nj-progress-fill"></div>
+            </div>
+          </div>
+          <div id="nj-error" style="font-size:11px;color:var(--danger);margin-top:10px;display:none"></div>
+        </div>
+
+      </div><!-- /nj-body -->
+
+      <div class="nj-footer">
+        <button class="nj-btn nj-btn-back" id="nj-btn-back" onclick="njBack()" style="visibility:hidden">← Back</button>
+        <span class="nj-step-indicator" id="nj-step-indicator">Step 1 of 3</span>
+        <button class="nj-btn nj-btn-next" id="nj-btn-next" onclick="njNext()">Next →</button>
+      </div>
     </div>
   </div>
 
@@ -1296,8 +1753,9 @@
       updateUserHeader();
       updateTierInfo();
       loadModels();
-      loadFrontendConfig();   // populate gpuBaseUrl for heavy-request routing
-      showScreen('screen-upload');
+      loadFrontendConfig();
+      loadJobs();
+      showScreen('screen-dashboard');
     }
 
     function updateUserHeader() {
@@ -2224,15 +2682,332 @@
       errorMsg.style.display     = 'none';
       document.getElementById('duration-chip').classList.remove('visible');
       hideLcLegend();
-      // Reset task selector to palm counting
       taskPalmInput.checked = true;
       onTaskChange();
       ['toggle-raster','toggle-vectors','toggle-basemap'].forEach(id => {
         document.getElementById(id).checked = true;
       });
-      loadModels();
-      showScreen('screen-upload');
+      loadJobs();
+      showScreen('screen-dashboard');
     });
+
+    // ══════════════════════════════════════════════════════════════
+    //  JOB DASHBOARD
+    // ══════════════════════════════════════════════════════════════
+
+    // ── Helpers ────────────────────────────────────────────────────
+    function escapeHtml(str) {
+      return String(str)
+        .replace(/&/g,'&amp;').replace(/</g,'&lt;')
+        .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+    }
+
+    function timeAgo(isoStr) {
+      if (!isoStr) return '—';
+      const diff = Date.now() - new Date(isoStr).getTime();
+      const m = Math.floor(diff / 60000);
+      if (m <  1)  return 'just now';
+      if (m < 60)  return `${m}m ago`;
+      const h = Math.floor(m / 60);
+      if (h < 24)  return `${h}h ago`;
+      return `${Math.floor(h / 24)}d ago`;
+    }
+
+    function statusBadgeHtml(status) {
+      return `<span class="status-badge status-${status}">${status}</span>`;
+    }
+
+    function taskChipHtml(taskType) {
+      const cls = taskType === 'palm_counting' ? 'palm' : 'lc';
+      const lbl = taskType === 'palm_counting' ? '🌴 Palm' : '🗺 Land Cover';
+      return `<span class="task-chip ${cls}">${lbl}</span>`;
+    }
+
+    function jobActionsHtml(job) {
+      if (job.status === 'approval') {
+        return `<button class="job-action-btn review" onclick="openApprovalModal('${job.job_id}')">Review &amp; Approve</button>`;
+      }
+      if (job.status === 'done') {
+        return `<div class="job-actions-wrap">
+          <button class="job-action-btn dl" onclick="downloadJobResult('${job.job_id}','${job.task_type}')">⬇ GeoJSON</button>
+          <button class="job-action-btn preview" onclick="previewJobResult('${job.job_id}','${job.task_type}')">🗺 Preview</button>
+        </div>`;
+      }
+      if (job.status === 'uploading' || job.status === 'processing') {
+        return `<span style="font-size:10px;color:var(--text-dim);letter-spacing:0.08em">In progress…</span>`;
+      }
+      if (job.status === 'failed') {
+        return `<span style="font-size:10px;color:var(--danger)">Failed</span>`;
+      }
+      return '<span style="font-size:10px;color:var(--text-dim)">—</span>';
+    }
+
+    // ── Render table ───────────────────────────────────────────────
+    function renderJobsTable(jobs) {
+      const tbody = document.getElementById('jobs-tbody');
+      if (!tbody) return;
+      if (!jobs || jobs.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="7">
+          <div class="jobs-empty">
+            <div class="jobs-empty-icon">📋</div>
+            <div class="jobs-empty-text">No jobs yet · Click "New Job" to get started</div>
+          </div></td></tr>`;
+        return;
+      }
+      tbody.innerHTML = jobs.map(job => `
+        <tr>
+          <td class="job-id-cell" title="${escapeHtml(job.job_id)}">${job.job_id.substring(0,8)}…</td>
+          <td>
+            <div class="job-name-wrap">
+              <span class="job-name-text" id="jname-text-${job.job_id}">${escapeHtml(job.job_name)}</span>
+              <button class="btn-rename" onclick="startRename('${job.job_id}')" title="Rename">✎</button>
+            </div>
+          </td>
+          <td>${taskChipHtml(job.task_type)}</td>
+          <td>${statusBadgeHtml(job.status)}</td>
+          <td style="font-size:11px;color:var(--text-muted)">${job.token_cost > 0 ? job.token_cost.toLocaleString() : '—'}</td>
+          <td class="created-cell">${timeAgo(job.created_at)}</td>
+          <td>${jobActionsHtml(job)}</td>
+        </tr>`).join('');
+    }
+
+    // ── Load jobs from API ─────────────────────────────────────────
+    async function loadJobs() {
+      const tbody = document.getElementById('jobs-tbody');
+      if (!tbody) return;
+      try {
+        const resp = await authFetch('/api/jobs');
+        if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+        const { jobs } = await resp.json();
+        renderJobsTable(jobs);
+      } catch (err) {
+        if (tbody) tbody.innerHTML = `<tr><td colspan="7" style="text-align:center;padding:32px;color:var(--danger);font-size:11px">⚠ Failed to load jobs: ${escapeHtml(err.message)}</td></tr>`;
+      }
+    }
+
+    // ── Inline rename ──────────────────────────────────────────────
+    function startRename(jobId) {
+      const textEl = document.getElementById(`jname-text-${jobId}`);
+      if (!textEl) return;
+      const current = textEl.textContent;
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'job-name-input';
+      input.value = current;
+      input.maxLength = 128;
+      const wrap = textEl.parentElement;
+      wrap.replaceChild(input, textEl);
+      input.focus(); input.select();
+
+      async function commitRename() {
+        const newName = input.value.trim() || current;
+        const newSpan = document.createElement('span');
+        newSpan.className = 'job-name-text';
+        newSpan.id = `jname-text-${jobId}`;
+        newSpan.textContent = newName;
+        wrap.replaceChild(newSpan, input);
+        if (newName === current) return;
+        try {
+          await authFetch(`/api/jobs/${jobId}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ job_name: newName }),
+          });
+        } catch(_) {}
+      }
+      input.addEventListener('blur', commitRename);
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter')  input.blur();
+        if (e.key === 'Escape') { input.value = current; input.blur(); }
+      });
+    }
+
+    // ── Stub actions (wired in Steps 53-54) ───────────────────────
+    function openApprovalModal(jobId) {
+      // implemented in Step 53
+      alert(`Approval flow for job ${jobId} — coming in Step 53`);
+    }
+    function downloadJobResult(jobId, taskType) {
+      // implemented in Step 54
+      alert(`Download for job ${jobId} — coming in Step 54`);
+    }
+    function previewJobResult(jobId, taskType) {
+      // implemented in Step 54
+      alert(`Preview for job ${jobId} — coming in Step 54`);
+    }
+
+    // ══════════════════════════════════════════════════════════════
+    //  NEW JOB MODAL
+    // ══════════════════════════════════════════════════════════════
+
+    let _njStep       = 1;
+    let _njTask       = 'palm_counting';
+    let _njFile       = null;
+    let _njJobId      = null;
+
+    function openNewJobModal() {
+      _njStep  = 1; _njTask = 'palm_counting'; _njFile = null; _njJobId = null;
+      document.getElementById('nj-job-name').value = '';
+      document.getElementById('nj-drop-filename').style.display = 'none';
+      document.getElementById('nj-upload-progress').style.display = 'none';
+      document.getElementById('nj-progress-fill').style.width = '0%';
+      document.getElementById('nj-error').style.display = 'none';
+      document.getElementById('nj-file-input').value = '';
+      document.getElementById('tc-palm').classList.add('selected');
+      document.getElementById('tc-lc').classList.remove('selected');
+      njUpdateUI();
+      document.getElementById('new-job-overlay').classList.add('open');
+    }
+
+    function closeNewJobModal() {
+      document.getElementById('new-job-overlay').classList.remove('open');
+    }
+
+    function njSelectTask(task) {
+      _njTask = task;
+      document.getElementById('tc-palm').classList.toggle('selected', task === 'palm_counting');
+      document.getElementById('tc-lc').classList.toggle('selected', task === 'land_cover');
+    }
+
+    function njUpdateUI() {
+      for (let i = 1; i <= 3; i++) {
+        const tab = document.getElementById(`nj-step-${i}`);
+        tab.classList.remove('active','done');
+        if (i === _njStep)       tab.classList.add('active');
+        else if (i < _njStep)   tab.classList.add('done');
+        document.getElementById(`nj-pane-${i}`).classList.toggle('active', i === _njStep);
+      }
+      const backBtn = document.getElementById('nj-btn-back');
+      const nextBtn = document.getElementById('nj-btn-next');
+      backBtn.style.visibility = _njStep === 1 ? 'hidden' : 'visible';
+      nextBtn.disabled = false;
+      nextBtn.textContent = _njStep === 3 ? 'Create & Upload' : 'Next →';
+      document.getElementById('nj-step-indicator').textContent = `Step ${_njStep} of 3`;
+      if (_njStep === 2) {
+        document.getElementById('nj-params-palm').style.display = _njTask === 'palm_counting' ? '' : 'none';
+        document.getElementById('nj-params-lc').style.display   = _njTask === 'land_cover'    ? '' : 'none';
+      }
+    }
+
+    function njBack() {
+      if (_njStep > 1) { _njStep--; njUpdateUI(); }
+    }
+
+    async function njNext() {
+      if (_njStep < 3) { _njStep++; njUpdateUI(); }
+      else              { await njCreateAndUpload(); }
+    }
+
+    function njGetParams() {
+      if (_njTask === 'palm_counting') {
+        return {
+          conf_threshold: parseFloat(document.getElementById('nj-conf').value),
+          nms_threshold:  parseFloat(document.getElementById('nj-nms').value),
+          min_distance:   parseFloat(document.getElementById('nj-min-dist').value),
+          tile_width:     parseInt(document.getElementById('nj-tile-size').value, 10),
+          tile_height:    parseInt(document.getElementById('nj-tile-size').value, 10),
+        };
+      }
+      return {
+        tile_size:      parseInt(document.getElementById('nj-lc-tile-size').value, 10),
+        overlap:        parseInt(document.getElementById('nj-lc-overlap').value, 10),
+        min_noise_size: parseInt(document.getElementById('nj-lc-noise').value, 10),
+        use_filter:     document.getElementById('nj-lc-filter').value === 'true',
+      };
+    }
+
+    async function njCreateAndUpload() {
+      if (!_njFile) {
+        const errEl = document.getElementById('nj-error');
+        errEl.textContent = '⚠ Please select a GeoTIFF file first.';
+        errEl.style.display = 'block';
+        return;
+      }
+      const jobName    = document.getElementById('nj-job-name').value.trim() || 'Untitled Job';
+      const nextBtn    = document.getElementById('nj-btn-next');
+      const backBtn    = document.getElementById('nj-btn-back');
+      const errEl      = document.getElementById('nj-error');
+      const progWrap   = document.getElementById('nj-upload-progress');
+      const progFill   = document.getElementById('nj-progress-fill');
+      const progStatus = document.getElementById('nj-upload-status');
+      const progPct    = document.getElementById('nj-upload-pct');
+
+      errEl.style.display = 'none';
+      nextBtn.disabled = true;
+      backBtn.style.visibility = 'hidden';
+      progWrap.style.display = 'block';
+
+      try {
+        // 1. Create job record (status: uploading)
+        progStatus.textContent = 'Creating job record…';
+        progPct.textContent = '';
+        const createRes = await authFetch('/api/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            job_name:   jobName,
+            task_type:  _njTask,
+            parameters: njGetParams(),
+            file_uri:   '',
+          }),
+        });
+        if (!createRes.ok) throw new Error('Failed to create job: ' + await parseErrorResponse(createRes));
+        const job = await createRes.json();
+        _njJobId = job.job_id;
+
+        // 2. Upload file to GCS via signed URL
+        const gcsPath = await uploadToGcs(_njFile, pct => {
+          progStatus.textContent = 'Uploading to cloud storage…';
+          progPct.textContent    = `${pct}%`;
+          progFill.style.width   = `${pct}%`;
+        });
+        progFill.style.width = '100%';
+        progPct.textContent  = '100%';
+
+        // 3. Update job: set file_uri + advance status to approval
+        progStatus.textContent = 'Finalising…';
+        await authFetch(`/api/jobs/${_njJobId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ status: 'approval', file_uri: gcsPath }),
+        });
+
+        closeNewJobModal();
+        await loadJobs();
+
+      } catch (err) {
+        errEl.textContent = '⚠ ' + err.message;
+        errEl.style.display = 'block';
+        nextBtn.disabled = false;
+        backBtn.style.visibility = 'visible';
+        progWrap.style.display = 'none';
+      }
+    }
+
+    // ── New-job file drop zone (wired after DOM ready) ─────────────
+    document.addEventListener('DOMContentLoaded', () => {
+      const njFileInput = document.getElementById('nj-file-input');
+      const njDropzone  = document.getElementById('nj-dropzone');
+      const njFilename  = document.getElementById('nj-drop-filename');
+
+      function setNjFile(file) {
+        if (!file) return;
+        _njFile = file;
+        njFilename.textContent  = '✓ ' + file.name;
+        njFilename.style.display = 'block';
+        document.getElementById('nj-error').style.display = 'none';
+      }
+
+      njFileInput.addEventListener('change', () => setNjFile(njFileInput.files[0]));
+      njDropzone.addEventListener('dragover',  e => { e.preventDefault(); njDropzone.classList.add('drag-over'); });
+      njDropzone.addEventListener('dragleave', () => njDropzone.classList.remove('drag-over'));
+      njDropzone.addEventListener('drop', e => {
+        e.preventDefault();
+        njDropzone.classList.remove('drag-over');
+        setNjFile(e.dataTransfer.files[0]);
+      });
+    });
+
   </script>
 </body>
 </html>
