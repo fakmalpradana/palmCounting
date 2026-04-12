@@ -1372,7 +1372,7 @@
     <!-- Floating action card — positioned top-left, clear of navbar and topbar -->
     <div class="map-actions-card">
       <button class="btn-icon download" id="btn-download" title="Download GeoJSON">⬇ Download</button>
-      <button class="btn-icon" id="btn-new">↩ New File</button>
+      <button class="btn-icon" id="btn-new">↩ Dashboard</button>
     </div>
 
     <!-- Layer controls -->
@@ -1901,11 +1901,28 @@
         `Base 50  +  Area ${areaCost.toFixed(1)}  +  Size ${sizeCost.toFixed(1)}`;
     }
 
+    // ── Dashboard polling ──────────────────────────────────────────────────
+    let _dashPollTimer = null;
+
+    function startDashboardPolling() {
+      stopDashboardPolling();
+      _dashPollTimer = setInterval(() => {
+        const dash = document.getElementById('screen-dashboard');
+        if (dash && dash.classList.contains('active')) loadJobs();
+      }, 8000);
+    }
+
+    function stopDashboardPolling() {
+      if (_dashPollTimer) { clearInterval(_dashPollTimer); _dashPollTimer = null; }
+    }
+
     // ── Screen management ──────────────────────────────────────────────────
     function showScreen(id) {
       document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
       const el = document.getElementById(id);
       if (el) el.classList.add('active');
+      if (id === 'screen-dashboard') startDashboardPolling();
+      else stopDashboardPolling();
     }
 
     // ── Auth initialization (runs on every page load) ──────────────────────
@@ -2919,9 +2936,10 @@
         return `<button class="job-action-btn review" onclick="openApprovalModal('${job.job_id}')">Review &amp; Approve</button>`;
       }
       if (job.status === 'done') {
+        const rid = escapeHtml(job.result_uri || '');
         return `<div class="job-actions-wrap">
-          <button class="job-action-btn dl" onclick="downloadJobResult('${job.job_id}','${job.task_type}')">⬇ GeoJSON</button>
-          <button class="job-action-btn preview" onclick="previewJobResult('${job.job_id}','${job.task_type}')">🗺 Preview</button>
+          <button class="job-action-btn dl" onclick="downloadJobResult('${rid}','${job.task_type}')">⬇ GeoJSON</button>
+          <button class="job-action-btn preview" onclick="previewJobResult('${job.job_id}','${job.task_type}','${rid}')">🗺 Preview</button>
         </div>`;
       }
       if (job.status === 'uploading' || job.status === 'processing') {
@@ -3013,14 +3031,59 @@
       });
     }
 
-    // ── Stub actions (wired in Step 54) ───────────────────────────
-    function downloadJobResult(jobId, taskType) {
-      // implemented in Step 54
-      alert(`Download for job ${jobId} — coming in Step 54`);
+    // ── Download GeoJSON result ────────────────────────────────────
+    function downloadJobResult(resultUri, taskType) {
+      if (!resultUri) return;
+      const url = taskType === 'land_cover'
+        ? `/api/download/land-cover/${resultUri}`
+        : `/api/download/${resultUri}`;
+      window.location.href = url;
     }
-    function previewJobResult(jobId, taskType) {
-      // implemented in Step 54
-      alert(`Preview for job ${jobId} — coming in Step 54`);
+
+    // ── Preview job result on the map ──────────────────────────────
+    async function previewJobResult(jobId, taskType, resultUri) {
+      if (!resultUri) { alert('Result file not available yet.'); return; }
+
+      // Show loading screen while we fetch the GeoJSON
+      showScreen('screen-loading');
+      startLoadingAnimation(taskType === 'land_cover');
+
+      try {
+        const downloadUrl = taskType === 'land_cover'
+          ? `/api/download/land-cover/${resultUri}`
+          : `/api/download/${resultUri}`;
+
+        const resp = await authFetch(downloadUrl);
+        if (!resp.ok) throw new Error(`Failed to fetch result (${resp.status})`);
+        const geojson = await resp.json();
+
+        // Populate globals so preview/download endpoints resolve correctly
+        currentFileId     = resultUri;
+        currentTaskType   = taskType;
+        currentResultBase = '';   // results live on this (CPU) service
+
+        const modelName = taskType === 'land_cover'
+          ? 'unet_swin.onnx'
+          : 'palmCounting-model.onnx';
+
+        const data = {
+          file_id:          resultUri,
+          task_type:        taskType,
+          duration_seconds: geojson.metadata?.duration_seconds ?? '—',
+          tokens_deducted:  0,
+          geojson,
+        };
+
+        stopLoadingAnimation(geojson.metadata?.count ?? 0);
+        await new Promise(r => setTimeout(r, 300));
+        await buildMap(data, modelName);
+        showScreen('screen-map');
+
+      } catch (err) {
+        stopLoadingAnimation('!');
+        showScreen('screen-dashboard');
+        alert('Preview failed: ' + err.message);
+      }
     }
 
     // ══════════════════════════════════════════════════════════════
