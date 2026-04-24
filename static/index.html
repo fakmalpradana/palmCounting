@@ -473,6 +473,43 @@
     }
     .btn-google-login:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.3); }
 
+    /* Email/Password Auth */
+    .auth-tabs { display: flex; gap: 0; margin-bottom: 1rem; }
+    .auth-tab {
+      flex: 1; padding: 0.6rem; text-align: center; cursor: pointer;
+      background: transparent; border: 1px solid #333; color: #888;
+      font-size: 0.85rem; transition: all 0.2s;
+    }
+    .auth-tab:first-child { border-radius: 4px 0 0 4px; }
+    .auth-tab:last-child { border-radius: 0 4px 4px 0; }
+    .auth-tab.active { background: #1a1a2e; color: #fff; border-color: #555; }
+    .auth-form { width: 100%; max-width: 320px; display: flex; flex-direction: column; gap: 0.75rem; }
+    .auth-form input {
+      padding: 0.7rem 0.9rem; border: 1px solid #333; border-radius: 4px;
+      background: #111; color: #fff; font-size: 0.9rem; outline: none;
+    }
+    .auth-form input:focus { border-color: #4285F4; }
+    .auth-form input::placeholder { color: #555; }
+    .btn-auth-submit {
+      padding: 0.75rem; border: none; border-radius: 4px; cursor: pointer;
+      background: #4285F4; color: #fff; font-size: 0.95rem; font-weight: 500;
+      transition: background 0.2s;
+    }
+    .btn-auth-submit:hover { background: #3367d6; }
+    .btn-auth-submit:disabled { opacity: 0.5; cursor: not-allowed; }
+    .auth-divider {
+      display: flex; align-items: center; gap: 1rem; width: 100%; max-width: 320px;
+      color: #555; font-size: 0.8rem;
+    }
+    .auth-divider::before, .auth-divider::after { content: ''; flex: 1; border-top: 1px solid #333; }
+    .auth-link { color: #4285F4; cursor: pointer; font-size: 0.8rem; text-decoration: none; }
+    .auth-link:hover { text-decoration: underline; }
+    .auth-msg { font-size: 0.85rem; text-align: center; padding: 0.5rem; border-radius: 4px; }
+    .auth-msg.error { color: #ff6b6b; background: rgba(255,107,107,0.1); }
+    .auth-msg.success { color: #51cf66; background: rgba(81,207,102,0.1); }
+    .auth-panel { display: none; width: 100%; max-width: 320px; flex-direction: column; align-items: center; gap: 0.75rem; }
+    .auth-panel.active { display: flex; }
+
     /* ============================================================
        ADMIN PANEL OVERLAY
     ============================================================ */
@@ -1378,6 +1415,66 @@
     <div class="login-container">
       <h1 class="login-title">PALM COUNTER</h1>
       <p class="login-subtitle">WebGIS YOLO Detection Platform</p>
+
+      <div id="auth-message" class="auth-msg" style="display:none; max-width:320px;"></div>
+
+      <!-- Sign In / Register tabs -->
+      <div id="auth-panel-email" class="auth-panel active">
+        <div class="auth-tabs">
+          <div class="auth-tab active" onclick="switchAuthTab('login')">Sign In</div>
+          <div class="auth-tab" onclick="switchAuthTab('register')">Register</div>
+        </div>
+
+        <!-- Login form -->
+        <form id="form-login" class="auth-form" onsubmit="handleEmailLogin(event)">
+          <input type="email" id="login-email" placeholder="Email" required>
+          <input type="password" id="login-password" placeholder="Password" required minlength="8">
+          <button type="submit" class="btn-auth-submit">Sign In</button>
+          <a class="auth-link" onclick="showAuthPanel('forgot')">Forgot password?</a>
+        </form>
+
+        <!-- Register form -->
+        <form id="form-register" class="auth-form" style="display:none" onsubmit="handleRegister(event)">
+          <input type="text" id="register-name" placeholder="Full name" required>
+          <input type="email" id="register-email" placeholder="Email" required>
+          <input type="password" id="register-password" placeholder="Password (min 8 characters)" required minlength="8">
+          <button type="submit" class="btn-auth-submit">Create Account</button>
+        </form>
+      </div>
+
+      <!-- Forgot password panel -->
+      <div id="auth-panel-forgot" class="auth-panel">
+        <form class="auth-form" onsubmit="handleForgotPassword(event)">
+          <p style="color:#aaa; font-size:0.85rem; margin:0;">Enter your email to receive a reset link.</p>
+          <input type="email" id="forgot-email" placeholder="Email" required>
+          <button type="submit" class="btn-auth-submit">Send Reset Link</button>
+          <a class="auth-link" onclick="showAuthPanel('email')">Back to sign in</a>
+        </form>
+      </div>
+
+      <!-- Reset password panel (shown via URL param) -->
+      <div id="auth-panel-reset" class="auth-panel">
+        <form class="auth-form" onsubmit="handleResetPassword(event)">
+          <p style="color:#aaa; font-size:0.85rem; margin:0;">Enter your new password.</p>
+          <input type="password" id="reset-new-password" placeholder="New password (min 8 characters)" required minlength="8">
+          <button type="submit" class="btn-auth-submit">Reset Password</button>
+        </form>
+      </div>
+
+      <!-- Resend verification panel -->
+      <div id="auth-panel-verify-pending" class="auth-panel">
+        <p style="color:#aaa; font-size:0.85rem; margin:0; text-align:center;">
+          Please verify your email before logging in.
+        </p>
+        <form class="auth-form" onsubmit="handleResendVerification(event)">
+          <input type="email" id="resend-email" placeholder="Email" required>
+          <button type="submit" class="btn-auth-submit">Resend Verification Email</button>
+          <a class="auth-link" onclick="showAuthPanel('email')">Back to sign in</a>
+        </form>
+      </div>
+
+      <div class="auth-divider"><span>or</span></div>
+
       <a href="/api/auth/login" class="btn-google-login">
         <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
           <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.875 2.684-6.615z" fill="#4285F4"/>
@@ -2188,8 +2285,190 @@
       else stopDashboardPolling();
     }
 
+    // ── Email / Password Auth helpers ──────────────────────────────────────
+
+    function showAuthMessage(text, type = 'error') {
+      const el = document.getElementById('auth-message');
+      el.textContent = text;
+      el.className = 'auth-msg ' + type;
+      el.style.display = 'block';
+    }
+    function hideAuthMessage() {
+      document.getElementById('auth-message').style.display = 'none';
+    }
+
+    function switchAuthTab(tab) {
+      hideAuthMessage();
+      document.querySelectorAll('.auth-tab').forEach((t, i) => {
+        t.classList.toggle('active', (tab === 'login' && i === 0) || (tab === 'register' && i === 1));
+      });
+      document.getElementById('form-login').style.display = tab === 'login' ? 'flex' : 'none';
+      document.getElementById('form-register').style.display = tab === 'register' ? 'flex' : 'none';
+    }
+
+    function showAuthPanel(panel) {
+      hideAuthMessage();
+      document.querySelectorAll('.auth-panel').forEach(p => p.classList.remove('active'));
+      const el = document.getElementById('auth-panel-' + panel);
+      if (el) el.classList.add('active');
+    }
+
+    async function handleEmailLogin(e) {
+      e.preventDefault();
+      hideAuthMessage();
+      const email = document.getElementById('login-email').value;
+      const password = document.getElementById('login-password').value;
+      try {
+        const resp = await fetch('/api/auth/email-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email, password }),
+        });
+        const data = await resp.json();
+        if (resp.status === 403) {
+          // Unverified email — show resend panel.
+          document.getElementById('resend-email').value = email;
+          showAuthPanel('verify-pending');
+          showAuthMessage(data.detail || 'Please verify your email', 'error');
+          return;
+        }
+        if (!resp.ok) {
+          showAuthMessage(data.detail || 'Login failed');
+          return;
+        }
+        accessToken = data.access_token;
+        currentUser = data.user;
+        onAuthSuccess();
+      } catch (err) {
+        showAuthMessage('Network error. Please try again.');
+      }
+    }
+
+    async function handleRegister(e) {
+      e.preventDefault();
+      hideAuthMessage();
+      const name = document.getElementById('register-name').value;
+      const email = document.getElementById('register-email').value;
+      const password = document.getElementById('register-password').value;
+      try {
+        const resp = await fetch('/api/auth/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ email, password, name }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          showAuthMessage(data.detail || 'Registration failed');
+          return;
+        }
+        if (data.access_token) {
+          // Google-linked account — already verified, log in directly.
+          accessToken = data.access_token;
+          currentUser = data.user;
+          onAuthSuccess();
+        } else {
+          showAuthMessage(data.message || 'Check your email to verify your account.', 'success');
+        }
+      } catch (err) {
+        showAuthMessage('Network error. Please try again.');
+      }
+    }
+
+    async function handleForgotPassword(e) {
+      e.preventDefault();
+      hideAuthMessage();
+      const email = document.getElementById('forgot-email').value;
+      try {
+        const resp = await fetch('/api/auth/request-password-reset', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await resp.json();
+        showAuthMessage(data.message || 'If that email is registered, a reset link has been sent.', 'success');
+      } catch (err) {
+        showAuthMessage('Network error. Please try again.');
+      }
+    }
+
+    async function handleResetPassword(e) {
+      e.preventDefault();
+      hideAuthMessage();
+      const newPassword = document.getElementById('reset-new-password').value;
+      const params = new URLSearchParams(window.location.search);
+      const token = params.get('reset_token');
+      if (!token) { showAuthMessage('Invalid reset link'); return; }
+      try {
+        const resp = await fetch('/api/auth/reset-password', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token, new_password: newPassword }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) { showAuthMessage(data.detail || 'Reset failed'); return; }
+        showAuthMessage('Password reset successfully. You can now sign in.', 'success');
+        // Clear URL params and show login form after a short delay.
+        setTimeout(() => { window.history.replaceState({}, '', '/'); showAuthPanel('email'); switchAuthTab('login'); }, 2000);
+      } catch (err) {
+        showAuthMessage('Network error. Please try again.');
+      }
+    }
+
+    async function handleResendVerification(e) {
+      e.preventDefault();
+      hideAuthMessage();
+      const email = document.getElementById('resend-email').value;
+      try {
+        const resp = await fetch('/api/auth/resend-verification', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email }),
+        });
+        const data = await resp.json();
+        showAuthMessage(data.message || 'Verification email sent.', 'success');
+      } catch (err) {
+        showAuthMessage('Network error. Please try again.');
+      }
+    }
+
+    async function handleVerifyToken(token) {
+      try {
+        const resp = await fetch('/api/auth/verify-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ token }),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          showScreen('screen-login');
+          showAuthMessage(data.detail || 'Verification failed. The link may have expired.');
+          return;
+        }
+        accessToken = data.access_token;
+        currentUser = data.user;
+        window.history.replaceState({}, '', '/');
+        onAuthSuccess();
+      } catch (err) {
+        showScreen('screen-login');
+        showAuthMessage('Network error during verification.');
+      }
+    }
+
     // ── Auth initialization (runs on every page load) ──────────────────────
     async function initAuth() {
+      const params = new URLSearchParams(window.location.search);
+
+      // Handle email verification link.
+      const verifyToken = params.get('verify_token');
+      if (verifyToken) { await handleVerifyToken(verifyToken); return; }
+
+      // Handle password reset link — show the reset form.
+      const resetToken = params.get('reset_token');
+      if (resetToken) { showScreen('screen-login'); showAuthPanel('reset'); return; }
+
       try {
         const resp = await fetch('/api/auth/refresh', {
           method: 'POST',
