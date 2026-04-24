@@ -34,10 +34,84 @@ def get_db():
     return _db
 
 
+def set_email_index(email: str, user_uid: str) -> None:
+    """Create or update the email → user_uid lookup in the user_emails collection."""
+    if settings.dev_mode:
+        return
+    db = get_db()
+    db.collection("user_emails").document(email.lower()).set({"user_uid": user_uid})
+
+
+def get_user_by_email(email: str) -> Optional[dict]:
+    """Look up a user by email via the user_emails index collection."""
+    if settings.dev_mode:
+        if email.lower() == _DEV_USER["email"]:
+            return _DEV_USER
+        return None
+    db = get_db()
+    index_doc = db.collection("user_emails").document(email.lower()).get()
+    if not index_doc.exists:
+        return None
+    user_uid = index_doc.to_dict().get("user_uid")
+    if not user_uid:
+        return None
+    return get_user(user_uid)
+
+
+def create_email_user(email: str, name: str, password_hash: str) -> dict:
+    """Register a new user with email/password. Returns the user dict."""
+    if settings.dev_mode:
+        return _DEV_USER
+    uid = f"ep_{uuid.uuid4()}"
+    role = "superadmin" if email == SUPERADMIN_EMAIL else "user"
+    data = {
+        "email":               email.lower(),
+        "name":                name,
+        "avatar":              "",
+        "role":                role,
+        "token_balance":       0,
+        "daily_upload_count":  0,
+        "last_upload_date":    "",
+        "free_palm_used":      False,
+        "free_landcover_used": False,
+        "password_hash":       password_hash,
+        "auth_provider":       "email",
+        "email_verified":      False,
+    }
+    db = get_db()
+    db.collection("users").document(uid).set(data)
+    set_email_index(email, uid)
+    return {**data, "uid": uid}
+
+
 def upsert_user(google_uid: str, email: str, name: str, avatar: str) -> dict:
     if settings.dev_mode:
         return _DEV_USER
     db = get_db()
+
+    # Check if an email/password user already exists with this email (account linking).
+    index_doc = db.collection("user_emails").document(email.lower()).get()
+    if index_doc.exists:
+        existing_uid = index_doc.to_dict().get("user_uid", "")
+        if existing_uid and existing_uid != google_uid:
+            # An email/password account exists — link Google to it.
+            ref = db.collection("users").document(existing_uid)
+            doc = ref.get()
+            if doc.exists:
+                existing = doc.to_dict()
+                role = "superadmin" if email == SUPERADMIN_EMAIL else existing.get("role", "user")
+                updates = {
+                    "name": name,
+                    "avatar": avatar,
+                    "role": role,
+                    "auth_provider": "both",
+                    "google_uid": google_uid,
+                    "email_verified": True,
+                }
+                ref.update(updates)
+                return {**existing, **updates, "uid": existing_uid}
+
+    # Standard Google OAuth path (no pre-existing email/password account).
     ref = db.collection("users").document(google_uid)
     doc = ref.get()
 
@@ -51,7 +125,12 @@ def upsert_user(google_uid: str, email: str, name: str, avatar: str) -> dict:
     if doc.exists:
         existing = doc.to_dict()
         updates = {"email": email, "name": name, "avatar": avatar, "role": role}
+        if "auth_provider" not in existing:
+            updates["auth_provider"] = "google"
+        if "email_verified" not in existing:
+            updates["email_verified"] = True
         ref.update(updates)
+        set_email_index(email, google_uid)
         return {**existing, **updates, "uid": google_uid}
     else:
         data = {
@@ -64,8 +143,11 @@ def upsert_user(google_uid: str, email: str, name: str, avatar: str) -> dict:
             "last_upload_date":    "",
             "free_palm_used":      False,
             "free_landcover_used": False,
+            "auth_provider":       "google",
+            "email_verified":      True,
         }
         ref.set(data)
+        set_email_index(email, google_uid)
         return {**data, "uid": google_uid}
 
 
@@ -77,6 +159,29 @@ def get_user(google_uid: str) -> Optional[dict]:
     if not doc.exists:
         return None
     return {**doc.to_dict(), "uid": google_uid}
+
+
+def update_user_password(user_uid: str, password_hash: str) -> None:
+    """Set or update the password hash on a user doc (for registration or reset)."""
+    if settings.dev_mode:
+        return
+    db = get_db()
+    ref = db.collection("users").document(user_uid)
+    updates = {"password_hash": password_hash}
+    doc = ref.get()
+    if doc.exists:
+        existing = doc.to_dict()
+        if existing.get("auth_provider") == "google":
+            updates["auth_provider"] = "both"
+    ref.update(updates)
+
+
+def set_email_verified(user_uid: str) -> None:
+    """Mark a user's email as verified."""
+    if settings.dev_mode:
+        return
+    db = get_db()
+    db.collection("users").document(user_uid).update({"email_verified": True})
 
 
 def get_all_users() -> list[dict]:
