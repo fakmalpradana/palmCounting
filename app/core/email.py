@@ -25,7 +25,13 @@ def _send(to: str, subject: str, html_body: str) -> None:
     msg["Subject"] = subject
     msg.attach(MIMEText(html_body, "html"))
 
-    if settings.smtp_use_tls:
+    if settings.smtp_use_ssl:
+        # Implicit SSL (typically port 465).
+        with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port) as server:
+            server.login(settings.smtp_user, settings.smtp_password)
+            server.sendmail(msg["From"], [to], msg.as_string())
+    elif settings.smtp_use_tls:
+        # STARTTLS (typically port 587).
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port) as server:
             server.starttls()
             server.login(settings.smtp_user, settings.smtp_password)
