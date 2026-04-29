@@ -25,6 +25,10 @@ _DEV_USER: dict = {
 
 _db = None
 
+# In-memory stores for dev mode (email/password users + email index).
+_DEV_USERS: dict[str, dict] = {}   # uid → user dict
+_DEV_EMAIL_INDEX: dict[str, str] = {}  # email → uid
+
 
 def get_db():
     global _db
@@ -37,6 +41,7 @@ def get_db():
 def set_email_index(email: str, user_uid: str) -> None:
     """Create or update the email → user_uid lookup in the user_emails collection."""
     if settings.dev_mode:
+        _DEV_EMAIL_INDEX[email.lower()] = user_uid
         return
     db = get_db()
     db.collection("user_emails").document(email.lower()).set({"user_uid": user_uid})
@@ -45,6 +50,9 @@ def set_email_index(email: str, user_uid: str) -> None:
 def get_user_by_email(email: str) -> Optional[dict]:
     """Look up a user by email via the user_emails index collection."""
     if settings.dev_mode:
+        uid = _DEV_EMAIL_INDEX.get(email.lower())
+        if uid:
+            return _DEV_USERS.get(uid)
         if email.lower() == _DEV_USER["email"]:
             return _DEV_USER
         return None
@@ -61,7 +69,17 @@ def get_user_by_email(email: str) -> Optional[dict]:
 def create_email_user(email: str, name: str, password_hash: str) -> dict:
     """Register a new user with email/password. Returns the user dict."""
     if settings.dev_mode:
-        return _DEV_USER
+        uid = f"ep_{uuid.uuid4()}"
+        user = {
+            **{k: v for k, v in _DEV_USER.items() if k != "uid"},
+            "uid": uid, "email": email.lower(), "name": name,
+            "role": "superadmin" if email == SUPERADMIN_EMAIL else "user",
+            "token_balance": 0, "password_hash": password_hash,
+            "auth_provider": "email", "email_verified": False,
+        }
+        _DEV_USERS[uid] = user
+        _DEV_EMAIL_INDEX[email.lower()] = uid
+        return user
     uid = f"ep_{uuid.uuid4()}"
     role = "superadmin" if email == SUPERADMIN_EMAIL else "user"
     data = {
@@ -153,7 +171,7 @@ def upsert_user(google_uid: str, email: str, name: str, avatar: str) -> dict:
 
 def get_user(google_uid: str) -> Optional[dict]:
     if settings.dev_mode:
-        return _DEV_USER
+        return _DEV_USERS.get(google_uid, _DEV_USER)
     db = get_db()
     doc = db.collection("users").document(google_uid).get()
     if not doc.exists:
@@ -164,6 +182,11 @@ def get_user(google_uid: str) -> Optional[dict]:
 def update_user_password(user_uid: str, password_hash: str) -> None:
     """Set or update the password hash on a user doc (for registration or reset)."""
     if settings.dev_mode:
+        user = _DEV_USERS.get(user_uid)
+        if user:
+            user["password_hash"] = password_hash
+            if user.get("auth_provider") == "google":
+                user["auth_provider"] = "both"
         return
     db = get_db()
     ref = db.collection("users").document(user_uid)
@@ -179,6 +202,9 @@ def update_user_password(user_uid: str, password_hash: str) -> None:
 def set_email_verified(user_uid: str) -> None:
     """Mark a user's email as verified."""
     if settings.dev_mode:
+        user = _DEV_USERS.get(user_uid)
+        if user:
+            user["email_verified"] = True
         return
     db = get_db()
     db.collection("users").document(user_uid).update({"email_verified": True})
