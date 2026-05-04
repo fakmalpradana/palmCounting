@@ -20,7 +20,8 @@ def test_upsert_user_new(mocker):
     from app.core.firestore_client import upsert_user
     result = upsert_user("uid1", "test@example.com", "Test User", "http://avatar.url")
 
-    ref.set.assert_called_once()
+    # set() is called twice: once for user doc, once for user_emails index
+    assert ref.set.call_count == 2
     assert result["role"] == "user"
     assert result["token_balance"] == 0
     assert result["uid"] == "uid1"

@@ -1,0 +1,236 @@
+%% Palm Counter — Architecture Diagrams (Mermaid)
+%% Render with any Mermaid-compatible viewer or https://mermaid.live
+
+%% ============================================================
+%% 1. Auth Sequence Diagram
+%% ============================================================
+
+---
+title: Authentication Flow
+---
+
+sequenceDiagram
+    participant Browser
+    participant FastAPI as FastAPI (CPU Service)
+    participant Google as Google OAuth
+    participant Firestore
+
+    Note over Browser,Firestore: === Login Flow ===
+    Browser->>FastAPI: GET /api/auth/login
+    FastAPI->>FastAPI: Generate CSRF state token
+    FastAPI-->>Browser: 302 Redirect to Google OAuth<br/>(Set oauth_state cookie)
+    Browser->>Google: User authorizes app
+    Google-->>Browser: 302 Redirect to /api/auth/callback?code=...&state=...
+
+    Browser->>FastAPI: GET /api/auth/callback?code=...&state=...
+    FastAPI->>FastAPI: Verify oauth_state cookie == state param
+    FastAPI->>Google: POST token exchange (auth code → id_token)
+    Google-->>FastAPI: {id_token, access_token}
+    FastAPI->>FastAPI: Decode id_token (no sig verify — trusted exchange)
+    FastAPI->>Firestore: upsert_user(google_uid, email, name, avatar)
+    Firestore-->>FastAPI: User doc (with role)
+    FastAPI->>FastAPI: create_access_token({sub, email, role}) — 15 min<br/>create_refresh_token({sub}) — 7 days
+    FastAPI-->>Browser: 302 Redirect to frontend<br/>(Set refresh_token httponly cookie,<br/>Delete oauth_state cookie)
+
+    Note over Browser,Firestore: === Page Load / Session Restore ===
+    Browser->>FastAPI: POST /api/auth/refresh (refresh_token cookie)
+    FastAPI->>FastAPI: Decode & verify refresh JWT
+    FastAPI->>Firestore: get_user(uid) — fetch fresh role/balance
+    Firestore-->>FastAPI: User doc
+    FastAPI-->>Browser: {access_token, user: {uid, email, role, token_balance}}
+    Browser->>Browser: Store accessToken in memory (JS variable)
+
+    Note over Browser,Firestore: === Authenticated API Call ===
+    Browser->>FastAPI: GET /api/jobs (Authorization: Bearer <access_token>)
+    FastAPI->>FastAPI: get_current_user(): decode JWT, check type=="access"
+    FastAPI-->>Browser: 200 {jobs: [...]}
+
+    Note over Browser,Firestore: === Token Expired (Auto-Refresh) ===
+    Browser->>FastAPI: GET /api/jobs (expired access_token)
+    FastAPI-->>Browser: 401 Unauthorized
+    Browser->>FastAPI: POST /api/auth/refresh (cookie)
+    FastAPI-->>Browser: {new access_token, user}
+    Browser->>FastAPI: GET /api/jobs (new access_token)
+    FastAPI-->>Browser: 200 {jobs: [...]}
+
+    Note over Browser,Firestore: === Logout ===
+    Browser->>FastAPI: POST /api/auth/logout
+    FastAPI-->>Browser: 200 (Clear refresh_token cookie, max_age=0)
+    Browser->>Browser: Clear accessToken & currentUser from memory
+
+---
+
+%% ============================================================
+%% 2. System Architecture (Component Diagram)
+%% ============================================================
+
+---
+title: System Architecture
+---
+
+graph TB
+    subgraph Client["Browser (SPA)"]
+        FE["static/index.html<br/>Leaflet Map + Dashboard"]
+    end
+
+    subgraph CloudRun_CPU["Cloud Run — CPU Service"]
+        APP["FastAPI App<br/>app/main.py"]
+        subgraph Routers
+            AUTH_R["auth.py<br/>/api/auth/*"]
+            INF_R["inference.py<br/>/api/inference/*"]
+            JOBS_R["jobs.py<br/>/api/jobs/*"]
+            ADMIN_R["admin.py<br/>/api/admin/*"]
+        end
+        subgraph Core
+            CONFIG["config.py<br/>pydantic-settings"]
+            AUTH_C["auth.py<br/>JWT create/decode"]
+            INF_C["inference.py<br/>YOLO ONNX pipeline"]
+            LC_C["land_cover_inference.py<br/>SwinUnet pipeline"]
+            FS_C["firestore_client.py<br/>Users + Jobs CRUD"]
+        end
+        subgraph Middleware
+            AUTH_M["auth.py<br/>get_current_user<br/>require_role"]
+        end
+    end
+
+    subgraph CloudRun_GPU["Cloud Run — GPU Service (optional)"]
+        GPU["Palm Counter GPU<br/>NVIDIA L4"]
+    end
+
+    subgraph GCP["Google Cloud Platform"]
+        FIRESTORE[("Firestore<br/>users / jobs")]
+        GCS[("Cloud Storage<br/>uploads / results / models")]
+        GOOGLE["Google OAuth 2.0"]
+    end
+
+    FE -->|"REST API + JWT"| APP
+    APP --> AUTH_R & INF_R & JOBS_R & ADMIN_R
+    AUTH_R --> AUTH_C
+    AUTH_R --> FS_C
+    AUTH_R -->|"OAuth code exchange"| GOOGLE
+    INF_R --> INF_C & LC_C
+    INF_R --> FS_C
+    INF_R -->|"Route large jobs"| GPU
+    JOBS_R --> INF_C & LC_C
+    JOBS_R --> FS_C
+    ADMIN_R --> FS_C
+    AUTH_M -.->|"Depends()"| AUTH_R & INF_R & JOBS_R & ADMIN_R
+    FS_C --> FIRESTORE
+    INF_C -->|"Read/write files"| GCS
+    LC_C -->|"Read/write files"| GCS
+    FE -->|"Direct upload (signed URL)"| GCS
+    GPU -->|"Read rasters"| GCS
+    GPU -->|"Write results"| GCS
+
+    CONFIG -.->|"env vars"| AUTH_C & FS_C & INF_R
+
+---
+
+%% ============================================================
+%% 3. Job Lifecycle State Diagram
+%% ============================================================
+
+---
+title: Job Lifecycle
+---
+
+stateDiagram-v2
+    [*] --> uploading: POST /api/jobs<br/>(create job doc)
+
+    uploading --> approval: PATCH /api/jobs/{id}<br/>status="approval"<br/>(file upload to GCS complete)
+
+    approval --> processing: POST /api/jobs/{id}/approve<br/>(atomic token deduction,<br/>fires BackgroundTask)
+
+    processing --> done: Background inference completes<br/>(result_uri set)
+
+    processing --> failed: Exception during inference<br/>(error logged)
+
+    done --> [*]
+    failed --> [*]
+
+    note right of approval
+        GET /api/jobs/{id}/preflight
+        returns cost estimate
+        (no token deduction)
+    end note
+
+    note right of processing
+        _run_job_inference() runs in background:
+        1. Download GCS file
+        2. Run YOLO or SwinUnet
+        3. Save result GeoJSON/TIF
+        4. Update job status in Firestore
+    end note
+
+---
+
+%% ============================================================
+%% 4. Inference Pipeline (Activity Diagram)
+%% ============================================================
+
+---
+title: Inference Pipeline
+---
+
+flowchart TD
+    A[Upload GeoTIFF] --> B{File Size?}
+    B -->|"≤25 MB (Free Tier)"| C[Direct multipart upload<br/>POST /api/inference]
+    B -->|">25 MB (Commercial)"| D[GCS signed URL upload<br/>POST /api/upload/signed-url]
+
+    D --> E[Browser PUT to GCS]
+    E --> F[POST /api/inference/preflight-gcs<br/>Cost estimate]
+    F --> G{User confirms cost?}
+    G -->|No| Z[Cancel]
+    G -->|Yes| H[POST /api/inference/submit]
+
+    C --> I{Backend Selection}
+    H --> I
+
+    I -->|"onnxruntime-gpu available"| J[CUDA Provider]
+    I -->|"onnxruntime CPU"| K[CPU Provider]
+    I -->|"fallback"| L[cv2.dnn]
+
+    J & K & L --> M[Tile GeoTIFF<br/>640x640 overlapping grid]
+    M --> N[YOLO inference per tile<br/>NMS filtering]
+    N --> O[Pixel to Geo coordinates<br/>using raster transform + GSD]
+    O --> P[R-tree spatial dedup<br/>merge detections within min_distance]
+    P --> Q[Reproject to WGS84]
+    Q --> R[GeoJSON FeatureCollection<br/>with metadata]
+
+    R --> S[Save to results/file_id.geojson]
+    S --> T{Commercial?}
+    T -->|Yes| U[Atomic token deduction<br/>Firestore transaction]
+    T -->|No| V[Mark free trial used]
+    U & V --> W[Return result to frontend]
+    W --> X[Render on Leaflet map]
+
+---
+
+%% ============================================================
+%% 5. Role-Based Access Control
+%% ============================================================
+
+---
+title: Role-Based Access Control
+---
+
+graph LR
+    subgraph Roles
+        USER["user (default)"]
+        ADMIN["admin"]
+        SUPER["superadmin<br/>(fakmalpradana@gmail.com)"]
+    end
+
+    subgraph Endpoints
+        PUBLIC["Public<br/>/api/auth/login<br/>/api/auth/callback<br/>/api/auth/refresh<br/>/api/config"]
+        AUTH_EP["Authenticated<br/>/api/jobs/*<br/>/api/inference/*<br/>/api/models<br/>/api/auth/me"]
+        ADMIN_EP["Admin<br/>/api/admin/users<br/>/api/admin/stats<br/>/api/admin/activities<br/>/api/admin/users/{uid}/tokens"]
+        SUPER_EP["Superadmin Only<br/>/api/admin/users/{uid}/role"]
+    end
+
+    USER -->|"get_current_user()"| AUTH_EP
+    ADMIN -->|"get_current_user()"| AUTH_EP
+    ADMIN -->|"require_role('admin','superadmin')"| ADMIN_EP
+    SUPER -->|"get_current_user()"| AUTH_EP
+    SUPER -->|"require_role('admin','superadmin')"| ADMIN_EP
+    SUPER -->|"require_role('superadmin')"| SUPER_EP

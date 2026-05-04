@@ -27,5 +27,14 @@ class Settings(BaseSettings):
     cleanup_max_age_hours: int = 24
     cleanup_secret: str = ""
 
+    # SMTP settings for email verification and password reset
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False  # True for implicit SSL (port 465)
+
 
 settings = Settings()

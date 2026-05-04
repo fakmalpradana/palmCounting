@@ -30,6 +30,16 @@ def create_refresh_token(data: dict, expires_delta: timedelta | None = None) -> 
     return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
 
 
+def create_email_token(user_uid: str, token_type: str, expires_delta: timedelta) -> str:
+    """Create a short-lived token for email verification or password reset."""
+    payload = {
+        "sub": user_uid,
+        "type": token_type,
+        "exp": datetime.now(timezone.utc) + expires_delta,
+    }
+    return jwt.encode(payload, settings.jwt_secret, algorithm=ALGORITHM)
+
+
 def decode_token(token: str) -> dict:
     """Decode and verify a JWT. Raises jose.JWTError or jose.ExpiredSignatureError on failure."""
     return jwt.decode(token, settings.jwt_secret, algorithms=[ALGORITHM])
