@@ -759,6 +759,53 @@
     }
     .token-modal .btn-close:hover { background: var(--amber); color: #000; }
 
+    /* Credits modal */
+    .credits-modal {
+      background: var(--bg-card); border: 1px solid var(--border-hi);
+      border-left: 3px solid var(--lime); padding: 28px 32px;
+      width: min(520px, 94vw); position: relative; max-height: 80vh;
+      overflow-y: auto;
+    }
+    .credits-modal h2 {
+      font-family: var(--font-display); font-size: 20px;
+      letter-spacing: 0.06em; color: var(--lime); margin-bottom: 6px;
+    }
+    .credits-modal .credits-subtitle {
+      font-size: 10px; color: var(--text-dim); letter-spacing: 0.12em;
+      text-transform: uppercase; margin-bottom: 20px;
+    }
+    .credits-section-label {
+      font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase;
+      color: var(--text-dim); margin: 16px 0 8px;
+    }
+    .credits-list { list-style: none; padding: 0; margin: 0; }
+    .credits-list li {
+      font-size: 12px; color: var(--text); padding: 5px 0;
+      border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; gap: 8px;
+    }
+    .credits-list li:last-child { border-bottom: none; }
+    .credits-list li .role-badge {
+      font-size: 9px; letter-spacing: 0.1em; text-transform: uppercase;
+      color: var(--amber); background: rgba(251,191,36,0.08);
+      border: 1px solid rgba(251,191,36,0.25); padding: 1px 6px; flex-shrink: 0;
+    }
+    .credits-org {
+      font-size: 10px; color: var(--text-dim); margin-top: 16px;
+      padding-top: 14px; border-top: 1px solid var(--border);
+      letter-spacing: 0.04em;
+    }
+
+    /* Tip button in footer */
+    .footer-tip-btn {
+      background: none; border: 1px solid var(--border);
+      color: var(--text-dim); font-family: var(--font-mono);
+      font-size: 9px; letter-spacing: 0.14em; text-transform: uppercase;
+      padding: 2px 8px; cursor: pointer; margin-left: 10px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    .footer-tip-btn:hover { border-color: var(--lime); color: var(--lime); }
+
     /* ============================================================
        PRE-FLIGHT CONFIRMATION MODAL
     ============================================================ */
@@ -2050,7 +2097,8 @@
 
   <!-- Persistent footer (all screens) -->
   <footer class="app-footer">
-    Copyright © 2026 <em>&nbsp;Geo AI Twinverse&nbsp;</em> · Contributors: Fikri Kurniawan, Fairuz Akmal Pradana
+    Copyright © 2026 <em>&nbsp;Geo AI Twinverse&nbsp;</em> · UGM Geodetic Engineering
+    <button class="footer-tip-btn" onclick="showCredits()">Credits</button>
   </footer>
 
   <!-- ======================================================
@@ -2102,6 +2150,43 @@
         Cost (tokens) = 50 &nbsp;+&nbsp; (Area in Ha &times; 10) &nbsp;+&nbsp; (Size in GB &times; 200)
       </div>
       <button class="btn-close" onclick="hideTokenGuide()">Close</button>
+    </div>
+  </div>
+
+  <!-- Credits Modal -->
+  <div id="credits-modal" class="token-modal-overlay" onclick="if(event.target===this)hideCredits()">
+    <div class="credits-modal">
+      <h2>CREDITS</h2>
+      <div class="credits-subtitle">Geo AI Twinverse &mdash; UGM Geodetic Engineering Department</div>
+
+      <div class="credits-section-label">Principal Investigators &amp; Supervisors</div>
+      <ul class="credits-list">
+        <li><span class="role-badge">PI</span>Ir. Ruli Andaru, S.T., M.Eng., Ph.D.</li>
+        <li><span class="role-badge">Co-PI</span>Prof. Ir. Trias Aditya K.M., S.T., M.Sc., Ph.D., IPU., ASEAN Eng.</li>
+        <li><span class="role-badge">Co-PI</span>Dr.Eng. Ir. Purnama Budi Santosa, ST., M.App.Sc., IPU.</li>
+        <li><span class="role-badge">Co-PI</span>Dr. Ir. Bambang Kun Cahyono, S.T., M.Sc., IPU.</li>
+        <li><span class="role-badge">Co-PI</span>Dr. Ir. Yulaikhah, S.T., M.T.</li>
+      </ul>
+
+      <div class="credits-section-label">Researchers &amp; Developers</div>
+      <ul class="credits-list">
+        <li>Calvin Wijaya, S.T., M. Eng.</li>
+        <li>Aldo Arya Saka, S.T.</li>
+        <li>Aulia Nur Fajriyah, S.T.</li>
+        <li>Dhias Muhammad Naufal, S.T.</li>
+        <li>Fairuz Akmal Pradana, S.T.</li>
+        <li>Habib Muhammad Thariq, S.Kom.</li>
+        <li>Fikri Kurniawan, S.T.</li>
+        <li>Raffi Satya Nugraha, S.T., M.Eng.</li>
+      </ul>
+
+      <div class="credits-org">
+        Department of Geodetic Engineering &middot; Faculty of Engineering<br>
+        Universitas Gadjah Mada, Yogyakarta, Indonesia &middot; &copy; 2026
+      </div>
+
+      <br>
+      <button class="btn-close" onclick="hideCredits()">Close</button>
     </div>
   </div>
 
@@ -2237,6 +2322,14 @@
     }
     function hideTokenGuide() {
       document.getElementById('token-guide-modal').classList.remove('open');
+    }
+
+    // ── Credits modal ──────────────────────────────────────────────────────
+    function showCredits() {
+      document.getElementById('credits-modal').classList.add('open');
+    }
+    function hideCredits() {
+      document.getElementById('credits-modal').classList.remove('open');
     }
 
     // ── Token Usage Calculator ─────────────────────────────────────────────
